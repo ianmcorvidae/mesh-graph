@@ -1,0 +1,15 @@
+[mqtt]
+broker = "mqtt.example.com"
+port = 1883
+username = ""
+password = ""
+topic = "msh/#"
+# Default Meshtastic channel encryption key
+encryption_key = "1PG7OiApB1nwvP+rz05pAQ=="
+
+[api]
+host = "0.0.0.0"
+port = 8080
+
+[db]
+path = "trace-graph.db"

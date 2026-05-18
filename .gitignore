@@ -1,0 +1,25 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime/config artifacts
+config.toml
+*.db
+*.sqlite3
+*.log
+
+# Coverage/build outputs
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# OS/editor noise
+.DS_Store
