@@ -158,8 +158,20 @@ def test_trace_graph_fast_path_edge_style(db):
 def test_trace_graph_reply_edge_style(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, is_reply=1)
     G = build_trace_graph(db, trace_id=TRACE_1)
-    edge_data = list(G.edges(data=True))
-    assert any(d.get("style") == "dashed" for _, _, d in edge_data)
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
+    assert edge["style"] == "dashed"
+    assert edge["dir"] == "back"
+
+
+def test_trace_graph_combines_outbound_and_reply_edge(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=4.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=7.0, is_reply=1)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
+    assert edge["dir"] == "both"
+    assert edge["style"] == "solid"
+    assert edge["label"] == "4.0dB\n7.0dB"
+    assert G.number_of_edges() == 1
 
 
 def test_trace_graph_highlights_from_to_nodes(db):

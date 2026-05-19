@@ -197,20 +197,62 @@ def build_trace_graph(
     G = nx.MultiDiGraph()
     from_id = None
     to_id = None
+    edge_map: dict[tuple[str, str], dict[str, object]] = {}
 
     for row in rows:
         color = _edge_color(row["trace_id"])
-        e0 = _node_str(row["link_start"])
-        e1 = _node_str(row["link_end"])
-        if row["is_fast_path"]:
-            style = "bold"
-        elif row["is_reply"]:
-            style = "dashed"
+        snr_label = _snr_label(row["snr"])
+        if row["is_reply"]:
+            e0 = _node_str(row["link_end"])
+            e1 = _node_str(row["link_start"])
+            rec = edge_map.setdefault(
+                (e0, e1),
+                {
+                    "color": color,
+                    "fontcolor": color,
+                    "out_label": None,
+                    "out_style": "solid",
+                    "back_label": None,
+                },
+            )
+            rec["back_label"] = snr_label
         else:
-            style = "solid"
-        G.add_edge(e0, e1, color=color, fontcolor=color, style=style, label=_snr_label(row["snr"]))
+            e0 = _node_str(row["link_start"])
+            e1 = _node_str(row["link_end"])
+            rec = edge_map.setdefault(
+                (e0, e1),
+                {
+                    "color": color,
+                    "fontcolor": color,
+                    "out_label": None,
+                    "out_style": "solid",
+                    "back_label": None,
+                },
+            )
+            rec["out_label"] = snr_label
+            rec["out_style"] = "bold" if row["is_fast_path"] else "solid"
         from_id = row["from_id"]
         to_id = row["to_id"]
+
+    for (e0, e1), rec in edge_map.items():
+        out_label = rec["out_label"]
+        back_label = rec["back_label"]
+        attrs = {
+            "color": rec["color"],
+            "fontcolor": rec["fontcolor"],
+        }
+        if out_label is not None and back_label is not None:
+            attrs["style"] = rec["out_style"]
+            attrs["dir"] = "both"
+            attrs["label"] = f"{out_label}\n({back_label})"
+        elif out_label is not None:
+            attrs["style"] = rec["out_style"]
+            attrs["label"] = out_label
+        else:
+            attrs["style"] = "dashed"
+            attrs["dir"] = "back"
+            attrs["label"] = back_label
+        G.add_edge(e0, e1, **attrs)
 
     from_str = _node_str(from_id)
     to_str = _node_str(to_id)
