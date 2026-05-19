@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import io
-import tempfile
-import os
-
 import networkx as nx
 
 

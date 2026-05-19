@@ -94,6 +94,26 @@ def test_simple_network_graph_deduplicates(db):
     assert G.number_of_edges() == 1
 
 
+def test_simple_network_graph_keeps_one_edge_per_direction(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_2, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_A, NODE_B, NODE_A)
+    G = build_simple_network_graph(db)
+    assert G.number_of_edges() == 2
+    assert G.has_edge(f"!{NODE_A:08x}", f"!{NODE_B:08x}")
+    assert G.has_edge(f"!{NODE_B:08x}", f"!{NODE_A:08x}")
+
+
+def test_simple_network_graph_uses_xor_color_and_snr_range_label(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=2.0)
+    _insert(db, TRACE_2, NODE_A, NODE_B, NODE_A, NODE_B, snr=6.0)
+    G = build_simple_network_graph(db)
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    expected_color = f"#{((NODE_A ^ NODE_B) & 0xFFFFFF):06x}"
+    assert edge["color"] == expected_color
+    assert edge["label"] == "2.0..6.0dB"
+
+
 # ---------------------------------------------------------------------------
 # build_trace_graph
 # ---------------------------------------------------------------------------
@@ -159,3 +179,89 @@ def test_node_graph_time_range(db):
     _insert(db, TRACE_2, NODE_A, NODE_C, NODE_A, NODE_C, ts=NOW)
     G = build_node_graph(db, node_id=NODE_A, start_ts=NOW - 60)
     assert G.number_of_edges() == 1
+
+
+def test_node_graph_direction_outbound_only(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A)
+    G = build_node_graph(db, node_id=NODE_A, direction="outbound")
+    edges = set(G.edges())
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x}") in edges
+    assert (f"!{NODE_C:08x}", f"!{NODE_A:08x}") not in edges
+
+
+def test_node_graph_direction_inbound_only(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A)
+    G = build_node_graph(db, node_id=NODE_A, direction="inbound")
+    edges = set(G.edges())
+    assert (f"!{NODE_C:08x}", f"!{NODE_A:08x}") in edges
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x}") not in edges
+
+
+def test_node_graph_depth_expands_multiple_hops(db):
+    node_d = 0xAAAA0004
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_C, NODE_B, NODE_C)
+    _insert(db, TRACE_1, NODE_C, node_d, NODE_C, node_d)
+    depth1 = build_node_graph(db, node_id=NODE_A, direction="outbound", depth=1)
+    depth2 = build_node_graph(db, node_id=NODE_A, direction="outbound", depth=2)
+    assert (f"!{NODE_B:08x}", f"!{NODE_C:08x}") not in set(depth1.edges())
+    assert (f"!{NODE_B:08x}", f"!{NODE_C:08x}") in set(depth2.edges())
+
+
+def test_node_graph_collapses_duplicate_links_and_tracks_snr_range(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=1.0, is_reply=0)
+    _insert(db, TRACE_2, NODE_A, NODE_B, NODE_A, NODE_B, snr=7.0, is_reply=1)
+    G = build_node_graph(db, node_id=NODE_A, direction="outbound", depth=1)
+    assert G.number_of_edges() == 1
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    expected_color = f"#{((NODE_A ^ NODE_B) & 0xFFFFFF):06x}"
+    assert edge["color"] == expected_color
+    assert edge["style"] == "solid"
+    assert edge["label"] == "1.0..7.0dB"
+
+
+def test_node_graph_both_splits_overlap_nodes_and_keeps_directional_parts(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_2, NODE_B, NODE_A, NODE_B, NODE_A)
+    G = build_node_graph(db, node_id=NODE_A, direction="both", depth=1)
+    edges = set(G.edges())
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x} [out]") in edges
+    assert (f"!{NODE_B:08x} [in]", f"!{NODE_A:08x}") in edges
+    assert (f"!{NODE_B:08x} [out]", f"!{NODE_A:08x}") not in edges
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x} [in]") not in edges
+    assert f"!{NODE_A:08x} [out]" not in G.nodes
+    assert f"!{NODE_A:08x} [in]" not in G.nodes
+
+
+def test_node_graph_network_keeps_combined_behavior(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_2, NODE_B, NODE_A, NODE_B, NODE_A)
+    G = build_node_graph(db, node_id=NODE_A, direction="network", depth=1)
+    edges = set(G.edges())
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x}") in edges
+    assert (f"!{NODE_B:08x}", f"!{NODE_A:08x}") in edges
+    assert not any("[out]" in n or "[in]" in n for n in G.nodes)
+
+
+def test_node_graph_outbound_depth_excludes_back_edges(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_C, NODE_B, NODE_C)
+    _insert(db, TRACE_2, NODE_C, NODE_B, NODE_C, NODE_B)  # back toward source
+    G = build_node_graph(db, node_id=NODE_A, direction="outbound", depth=3)
+    edges = set(G.edges())
+    assert (f"!{NODE_C:08x}", f"!{NODE_B:08x}") not in edges
+    assert (f"!{NODE_A:08x}", f"!{NODE_B:08x}") in edges
+    assert (f"!{NODE_B:08x}", f"!{NODE_C:08x}") in edges
+
+
+def test_node_graph_inbound_depth_excludes_forward_edges(db):
+    _insert(db, TRACE_1, NODE_C, NODE_B, NODE_C, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_A, NODE_B, NODE_A)
+    _insert(db, TRACE_2, NODE_B, NODE_C, NODE_B, NODE_C)  # away from source
+    G = build_node_graph(db, node_id=NODE_A, direction="inbound", depth=3)
+    edges = set(G.edges())
+    assert (f"!{NODE_B:08x}", f"!{NODE_C:08x}") not in edges
+    assert (f"!{NODE_C:08x}", f"!{NODE_B:08x}") in edges
+    assert (f"!{NODE_B:08x}", f"!{NODE_A:08x}") in edges

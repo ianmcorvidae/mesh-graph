@@ -114,7 +114,7 @@ def _node_color(nodenum: int) -> str:
 def _role_shape(role: Optional[str]) -> Optional[str]:
     if role in ("ROUTER", "ROUTER_CLIENT", "REPEATER"):
         return "rect"
-    if role in ("CLIENT", "ROUTER_LATE", None):
+    if role in ("CLIENT", "CLIENT_BASE", "ROUTER_LATE", None):
         return "diamond"
     return None
 
@@ -135,12 +135,39 @@ def get_links_for_network(
     return conn.execute(query, params).fetchall()
 
 
-def get_links_for_trace(conn: sqlite3.Connection, trace_id: int) -> list[sqlite3.Row]:
+def get_links_for_trace(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+    approx_ts: Optional[int] = None,
+) -> list[sqlite3.Row]:
+    query = (
+        "SELECT trace_id, from_id, to_id FROM traceroute "
+        "WHERE trace_id = ?"
+    )
+    params: list = [trace_id]
+    if from_id is not None:
+        query += " AND from_id = ?"
+        params.append(from_id)
+    if to_id is not None:
+        query += " AND to_id = ?"
+        params.append(to_id)
+    if approx_ts is not None:
+        query += " ORDER BY ABS(first_seen_ts - ?) ASC, first_seen_ts DESC, from_id DESC, to_id DESC"
+        params.append(approx_ts)
+    else:
+        query += " ORDER BY first_seen_ts DESC, from_id DESC, to_id DESC"
+    query += " LIMIT 1"
+
+    trace = conn.execute(query, params).fetchone()
+    if trace is None:
+        return []
     return conn.execute(
         "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
         "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
-        "WHERE tl.trace_id = ?",
-        (trace_id,),
+        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ?",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
     ).fetchall()
 
 

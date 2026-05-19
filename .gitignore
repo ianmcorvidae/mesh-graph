@@ -11,6 +11,8 @@ env/
 # Local runtime/config artifacts
 config.toml
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 *.log
 

@@ -66,14 +66,38 @@ All graph endpoints accept `?format=png` (default) or `?format=svg`.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /graph/network` | Full network-wide graph of all observed routes |
-| `GET /graph/trace/{trace_id}` | Graph for a single traceroute |
-| `GET /graph/node/{node_id}` | All routes through a specific node |
+| `GET /graph/network/simple` | Collapsed directional graph (one edge per direction) with SNR range labels |
+| `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default) |
+| `GET /graph/node/{node_id}` | Collapsed neighborhood graph around a specific node |
 
-`/graph/network` and `/graph/node/{node_id}` accept optional time-range filters:
+`/graph/network`, `/graph/network/simple`, and `/graph/node/{node_id}` accept optional time-range filters:
 
 ```
 ?start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z
 ```
+
+`/graph/trace/{trace_id}` also accepts optional selectors when `trace_id` is not unique:
+
+```
+?from=!aabbccdd&to=!eeff0011&date=2024-01-01T00:00:00Z
+```
+
+- `from`: expected origin node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
+- `to`: expected destination node (same formats)
+- `date`: approximate traceroute timestamp (ISO 8601); the closest match is selected
+
+`/graph/node/{node_id}` supports traversal controls:
+
+```
+?direction=both&depth=2
+```
+
+- `direction`: `inbound`, `outbound`, `both` (default), or `network`
+- `depth`: number of hops from the target node (`1..10`, default `1`)
+
+Node graph edges are collapsed per direction (one edge per node pair), use XOR-based link colors, and label the observed SNR range. This aggregation ignores whether the data came from outbound vs return traceroute paths.
+
+`direction=both` is the union of inbound and outbound *as separate parts*: overlapping nodes are split into `[in]` and `[out]` entries and each part keeps only links consistent with its direction. `direction=network` keeps the legacy mixed behavior (combined graph without splitting).
 
 Node IDs use the Meshtastic `!xxxxxxxx` hex format, e.g. `/graph/node/!aabbccdd`.
 
@@ -81,8 +105,26 @@ Node IDs use the Meshtastic `!xxxxxxxx` hex format, e.g. `/graph/node/!aabbccdd`
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /nodes` | JSON list of known nodes |
-| `GET /traceroutes` | JSON list of recent traceroutes |
+| `GET /nodes` | JSON list of known nodes, ordered by `last_seen_ts` descending |
+| `GET /traceroutes` | JSON list of recent traceroutes, ordered by `first_seen_ts` descending |
+
+Both data endpoints support timestamp cursor pagination:
+
+```
+?after=1711920000&limit=100
+```
+
+- `after`: UNIX timestamp cursor (defaults to current time)
+- `limit`: max number of rows to return (`1..500`)
+
+`/traceroutes` also supports optional endpoint filters:
+
+```
+?from=!aabbccdd&to=!eeff0011
+```
+
+- `from`: expected source node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
+- `to`: expected destination node (same formats)
 
 ### Examples
 
@@ -90,8 +132,17 @@ Node IDs use the Meshtastic `!xxxxxxxx` hex format, e.g. `/graph/node/!aabbccdd`
 # Save current network graph as PNG
 curl http://localhost:8080/graph/network -o network.png
 
+# Save simplified network graph as SVG (collapsed links + SNR ranges)
+curl "http://localhost:8080/graph/network/simple?format=svg" -o network-simple.svg
+
 # SVG of all routes through a specific node
 curl "http://localhost:8080/graph/node/!aabbccdd?format=svg" -o node.svg
+
+# Outbound neighborhood up to 2 hops from a node
+curl "http://localhost:8080/graph/node/!aabbccdd?format=svg&direction=outbound&depth=2" -o node-outbound.svg
+
+# Trace graph disambiguated by endpoint pair and approximate date
+curl "http://localhost:8080/graph/trace/12345?from=!aabbccdd&to=!eeff0011&date=2024-01-01T12:00:00Z" -o trace.svg
 
 # Network graph for the last hour
 curl "http://localhost:8080/graph/network?start=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" -o recent.png

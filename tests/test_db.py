@@ -108,6 +108,87 @@ def test_get_links_for_trace_includes_traceroute_endpoints(db):
     assert result[0]["to_id"] == 0xBB
 
 
+def test_get_links_for_trace_uses_latest_trace_for_same_trace_id(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (88, 0x01, 0x02, NOW - 10),
+        )
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (88, 0x03, 0x04, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (88, 0x01, 0x02, NOW - 10, 0x01, 0x02),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (88, 0x03, 0x04, NOW, 0x03, 0x04),
+        )
+
+    rows = get_links_for_trace(db, trace_id=88)
+    assert len(rows) == 1
+    assert rows[0]["from_id"] == 0x03
+    assert rows[0]["to_id"] == 0x04
+
+
+def test_get_links_for_trace_filters_by_from_and_to(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (89, 0x10, 0x20, NOW - 10),
+        )
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (89, 0x30, 0x40, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (89, 0x10, 0x20, NOW - 10, 0x10, 0x20),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (89, 0x30, 0x40, NOW, 0x30, 0x40),
+        )
+
+    rows = get_links_for_trace(db, trace_id=89, from_id=0x10, to_id=0x20)
+    assert len(rows) == 1
+    assert rows[0]["from_id"] == 0x10
+    assert rows[0]["to_id"] == 0x20
+
+
+def test_get_links_for_trace_uses_approx_ts_when_selecting_candidate(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (90, 0x50, 0x60, PAST),
+        )
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (90, 0x70, 0x80, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (90, 0x50, 0x60, PAST, 0x50, 0x60),
+        )
+        db.execute(
+            "INSERT INTO traceroute_link "
+            "(trace_id, from_id, to_id, ts, link_start, link_end) VALUES (?,?,?,?,?,?)",
+            (90, 0x70, 0x80, NOW, 0x70, 0x80),
+        )
+
+    rows = get_links_for_trace(db, trace_id=90, approx_ts=PAST + 2)
+    assert len(rows) == 1
+    assert rows[0]["from_id"] == 0x50
+    assert rows[0]["to_id"] == 0x60
+
+
 # --- get_links_for_node ---
 
 def test_get_links_for_node_as_start(db):

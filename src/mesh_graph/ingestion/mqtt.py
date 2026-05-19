@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from google.protobuf import json_format
 from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2, portnums_pb2
 
-from mesh_graph.db import get_connection, init_db, upsert_node
+from mesh_graph.db import get_connection, upsert_node
 from mesh_graph.ingestion.base import DataSource
 
 logger = logging.getLogger(__name__)
@@ -45,9 +45,6 @@ class MQTTDataSource(DataSource):
 
     def start(self, db_path: str) -> None:
         self._db_path = db_path
-        conn = get_connection(db_path)
-        init_db(conn)
-        conn.close()
 
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
