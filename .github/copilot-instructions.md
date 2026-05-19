@@ -70,7 +70,8 @@ uv run mesh-graph --config config.toml --mode api
 - **Node coloring**: By node ID (fixed per node)
 - **Edge coloring**: Uses XOR of link start/end for deterministic but distinct colors per direction pair
 - **SNR labels**: Optional on `/graph/network` via `snr_labels=true`; default is off
-- **Unknown-hop nodes**: Hidden by default on `/graph/network`; opt in with `include_unknown_nodes=true`
+- **Unknown-hop nodes**: Hidden by default on `/graph/network`; opt in with `include_unknown_nodes=true` (effective only with `include_clients=true`)
+- **Network backbone mode**: `/graph/network` defaults to showing only `ROUTER`, `ROUTER_LATE`, and `CLIENT_BASE`; use `include_clients=true` to include clients/non-backbone nodes directly
 - **Directionality**: Graph builders support `inbound`, `outbound`, `both` (split), or `network` (legacy mixed) modes
 - Collapsed network graphs show one edge per direction (aggregating all observed paths)
 

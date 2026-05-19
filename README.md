@@ -112,7 +112,7 @@ All graph endpoints accept `?format=svg` (default) or `?format=png`.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /graph/network` | Collapsed directional graph (one edge per direction) |
+| `GET /graph/network` | Collapsed directional graph focused on backbone nodes (ROUTER, ROUTER_LATE, CLIENT_BASE) |
 | `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default) |
 | `GET /graph/node/{node_id}` | Collapsed neighborhood graph around a specific node |
 
@@ -127,10 +127,14 @@ All graph endpoints accept `?format=svg` (default) or `?format=png`.
 ```
 ?snr_labels=true
 ?include_unknown_nodes=true
+?include_clients=true
 ```
 
 - `snr_labels`: include edge SNR labels (defaults to `false` for readability/performance)
 - `include_unknown_nodes`: include synthetic unknown-hop nodes (defaults to `false`)
+- `include_clients`: include client/other non-backbone nodes directly (defaults to `false`)
+
+When `include_clients=false`, `/graph/network` keeps only ROUTER/ROUTER_LATE/CLIENT_BASE nodes.
 
 `/graph/trace/{trace_id}` also accepts optional selectors when `trace_id` is not unique:
 
@@ -193,6 +197,9 @@ curl "http://localhost:8080/graph/network?format=svg" -o network.svg
 
 # Include SNR labels on network graph
 curl "http://localhost:8080/graph/network?format=svg&snr_labels=true" -o network-labeled.svg
+
+# Include client nodes in network graph
+curl "http://localhost:8080/graph/network?format=svg&include_clients=true" -o network-with-clients.svg
 
 # SVG of all routes through a specific node
 curl "http://localhost:8080/graph/node/!aabbccdd?format=svg" -o node.svg

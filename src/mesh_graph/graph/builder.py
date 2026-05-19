@@ -112,6 +112,7 @@ def build_simple_network_graph(
     end_ts: Optional[int] = None,
     include_snr_labels: bool = True,
     include_unknown_nodes: bool = True,
+    include_clients: bool = True,
 ) -> nx.DiGraph:
     with traced_span(
         "graph.build_simple_network_graph",
@@ -120,14 +121,41 @@ def build_simple_network_graph(
     ) as span:
         G = nx.DiGraph()
         edge_snrs: dict[tuple[str, str], list[float]] = {}
-
         rows = get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts)
         span.set_attribute("graph.input_rows", len(rows))
+        role_rows = conn.execute("SELECT nodenum, role FROM nodes").fetchall()
+        role_by_node = {row["nodenum"]: row["role"] for row in role_rows}
+        core_roles = {"ROUTER", "ROUTER_LATE", "CLIENT_BASE"}
+
+        def is_core_node(val: object) -> bool:
+            return isinstance(val, int) and role_by_node.get(val) in core_roles
+
+        effective_include_unknown = include_clients and include_unknown_nodes
+
+        def is_visible_node(val: object) -> bool:
+            if is_core_node(val):
+                return True
+            if not include_clients:
+                return False
+            if not isinstance(val, int):
+                return effective_include_unknown
+            return True
+
+        filtered_rows: list[sqlite3.Row] = []
         for row in rows:
-            if not include_unknown_nodes and (not isinstance(row["link_start"], int) or not isinstance(row["link_end"], int)):
+            start = row["link_start"]
+            end = row["link_end"]
+            if not effective_include_unknown and (not isinstance(start, int) or not isinstance(end, int)):
                 continue
-            e0 = _node_str(row["link_start"])
-            e1 = _node_str(row["link_end"])
+            filtered_rows.append(row)
+
+        for row in filtered_rows:
+            start = row["link_start"]
+            end = row["link_end"]
+            if not (is_visible_node(start) and is_visible_node(end)):
+                continue
+            e0 = _node_str(start)
+            e1 = _node_str(end)
             key = (e0, e1)
             if key not in edge_snrs:
                 edge_snrs[key] = []
@@ -135,7 +163,7 @@ def build_simple_network_graph(
                 edge_snrs[key].append(float(row["snr"]))
 
             if not G.has_edge(e0, e1):
-                color = _xor_link_color(row["link_start"], row["link_end"])
+                color = _xor_link_color(start, end)
                 G.add_edge(e0, e1, color=color, fontcolor=color, style="solid")
 
         if include_snr_labels:
@@ -195,6 +223,8 @@ def build_trace_graph(
         from_str: {"style": "filled", "fillcolor": "#ffa9a9"},
         to_str: {"style": "filled", "fillcolor": "#a9a9ff"},
     })
+    G.graph["rank_source_node"] = from_str
+    G.graph["rank_sink_node"] = to_str
 
     return G
 

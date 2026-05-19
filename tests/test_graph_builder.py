@@ -109,6 +109,25 @@ def test_simple_network_graph_can_include_unknown_nodes(db):
     assert "a038868c-698282d0-1" in G.nodes
 
 
+def test_simple_network_graph_core_only_mode_hides_clients(db):
+    upsert_node(db, NODE_A, long_name="A", short_name="A", role="CLIENT")
+    upsert_node(db, NODE_B, long_name="B", short_name="B", role="CLIENT")
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    G = build_simple_network_graph(db, include_clients=False)
+    assert G.number_of_edges() == 0
+
+
+def test_simple_network_graph_core_only_does_not_infer_links_via_clients(db):
+    node_d = 0xAAAA0004
+    upsert_node(db, NODE_A, long_name="A", short_name="A", role="ROUTER")
+    upsert_node(db, NODE_B, long_name="B", short_name="B", role="CLIENT")
+    upsert_node(db, node_d, long_name="D", short_name="D", role="CLIENT_BASE")
+    _insert(db, TRACE_1, NODE_A, node_d, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_A, node_d, NODE_B, node_d)
+    G = build_simple_network_graph(db, include_clients=False)
+    assert not G.has_edge(f"!{NODE_A:08x}", f"!{node_d:08x}")
+
+
 # ---------------------------------------------------------------------------
 # build_trace_graph
 # ---------------------------------------------------------------------------
@@ -150,6 +169,8 @@ def test_trace_graph_highlights_from_to_nodes(db):
     node_b_str = f"!{NODE_B:08x}"
     assert G.nodes[node_a_str].get("fillcolor") is not None
     assert G.nodes[node_b_str].get("fillcolor") is not None
+    assert G.graph["rank_source_node"] == node_a_str
+    assert G.graph["rank_sink_node"] == node_b_str
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,39 @@
 from __future__ import annotations
 
 import networkx as nx
+import pydot
 
 from mesh_graph.observability import traced_span
 
 
 _SUPPORTED = {"png", "svg"}
+
+
+def _to_pydot(G: nx.Graph, *, layout_prog: str) -> pydot.Dot:
+    pd = nx.nx_pydot.to_pydot(G)
+    if layout_prog == "sfdp":
+        pd.set("overlap", "prism")
+        pd.set("sep", "+8")
+        pd.set("esep", "+2")
+        pd.set("outputorder", "edgesfirst")
+        pd.set("K", "1.6")
+        pd.set("repulsiveforce", "2")
+
+    rank_source = G.graph.get("rank_source_node")
+    if isinstance(rank_source, str) and G.has_node(rank_source):
+        sub = pydot.Subgraph(graph_name="rank_source")
+        sub.set("rank", "source")
+        sub.add_node(pydot.Node(rank_source))
+        pd.add_subgraph(sub)
+
+    rank_sink = G.graph.get("rank_sink_node")
+    if isinstance(rank_sink, str) and G.has_node(rank_sink):
+        sub = pydot.Subgraph(graph_name="rank_sink")
+        sub.set("rank", "sink")
+        sub.add_node(pydot.Node(rank_sink))
+        pd.add_subgraph(sub)
+
+    return pd
 
 
 def render(G: nx.Graph, format: str, *, layout_prog: str = "dot") -> bytes:
@@ -18,14 +46,7 @@ def render(G: nx.Graph, format: str, *, layout_prog: str = "dot") -> bytes:
         warn_ms=1000,
         attributes={"graph.node_count": len(G.nodes), "graph.edge_count": len(G.edges)},
     ):
-        pd = nx.nx_pydot.to_pydot(G)
-        if layout_prog == "sfdp":
-            pd.set("overlap", "prism")
-            pd.set("sep", "+8")
-            pd.set("esep", "+2")
-            pd.set("outputorder", "edgesfirst")
-            pd.set("K", "1.6")
-            pd.set("repulsiveforce", "2")
+        pd = _to_pydot(G, layout_prog=layout_prog)
 
     with traced_span(f"renderer.graphviz.create_{fmt}", warn_ms=5000, attributes={"graphviz.prog": layout_prog}):
         if fmt == "png":

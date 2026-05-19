@@ -65,6 +65,7 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
         end: Optional[str] = Query(default=None),
         snr_labels: bool = Query(default=False),
         include_unknown_nodes: bool = Query(default=False),
+        include_clients: bool = Query(default=False),
     ):
         with traced_span(
             "api.graph.network",
@@ -73,6 +74,7 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
                 "format": format,
                 "snr_labels": snr_labels,
                 "include_unknown_nodes": include_unknown_nodes,
+                "include_clients": include_clients,
             },
         ):
             if format not in _MEDIA_TYPES:
@@ -86,6 +88,7 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
                     end_ts=end_ts,
                     include_snr_labels=snr_labels,
                     include_unknown_nodes=include_unknown_nodes,
+                    include_clients=include_clients,
                 )
                 span.set_attribute("graph.node_count", len(G.nodes))
                 span.set_attribute("graph.edge_count", len(G.edges))

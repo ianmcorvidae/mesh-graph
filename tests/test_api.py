@@ -88,7 +88,7 @@ def test_network_graph_invalid_format(client, db):
 
 def test_network_graph_can_include_snr_labels(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=3.5)
-    resp = client.get("/graph/network?format=svg&snr_labels=true")
+    resp = client.get("/graph/network?format=svg&snr_labels=true&include_clients=true")
     assert resp.status_code == 200
     assert b"3.5dB" in resp.content
 
@@ -102,7 +102,7 @@ def test_network_graph_suppresses_unknown_nodes_by_default(client, db):
 
 def test_network_graph_can_include_unknown_nodes(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
-    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true")
+    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true&include_clients=true")
     assert resp.status_code == 200
     assert b"a038868c" in resp.content
 
@@ -110,7 +110,7 @@ def test_network_graph_can_include_unknown_nodes(client, db):
 def test_network_graph_suppresses_snr_labels_by_default(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
     _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
-    resp = client.get("/graph/network?format=svg")
+    resp = client.get("/graph/network?format=svg&include_clients=true")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
     assert b"2.0..6.0dB" not in resp.content
@@ -119,7 +119,7 @@ def test_network_graph_suppresses_snr_labels_by_default(client, db):
 def test_network_graph_can_include_snr_range_labels(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
     _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
-    resp = client.get("/graph/network?format=svg&snr_labels=true")
+    resp = client.get("/graph/network?format=svg&snr_labels=true&include_clients=true")
     assert resp.status_code == 200
     assert b"2.0..6.0dB" in resp.content
 
@@ -132,14 +132,14 @@ def test_network_graph_route_does_not_exist(client, db):
 
 def test_network_graph_suppresses_unknown_nodes_by_default_on_collapsed_view(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
-    resp = client.get("/graph/network?format=svg")
+    resp = client.get("/graph/network?format=svg&include_clients=true")
     assert resp.status_code == 200
     assert b"a038868c" not in resp.content
 
 
 def test_network_graph_can_include_unknown_nodes_on_collapsed_view(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
-    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true")
+    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true&include_clients=true")
     assert resp.status_code == 200
     assert b"a038868c" in resp.content
 
@@ -148,7 +148,11 @@ def test_network_graph_uses_compact_labels(client, db):
     with db:
         db.execute(
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
-            (NODE_A, "Alpha Long Name", "ALPHA", "CLIENT", NOW),
+            (NODE_A, "Alpha Long Name", "ALPHA", "ROUTER", NOW),
+        )
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_B, "Beta Long Name", "BETA", "ROUTER", NOW),
         )
     _insert(db, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
     resp = client.get("/graph/network")
@@ -161,8 +165,47 @@ def test_network_graph_uses_compact_labels(client, db):
 def test_network_graph_time_range_collapsed_accepted(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, ts=PAST)
     _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, ts=NOW)
-    resp = client.get(f"/graph/network?start={_iso(NOW - 60)}")
+    resp = client.get(f"/graph/network?start={_iso(NOW - 60)}&include_clients=true")
     assert resp.status_code == 200
+
+
+def test_network_graph_default_hides_client_only_paths(client, db):
+    with db:
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_A, "A", "A", "CLIENT", NOW),
+        )
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_B, "B", "B", "CLIENT", NOW),
+        )
+    _insert(db, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    resp = client.get("/graph/network")
+    assert resp.status_code == 200
+    assert f"!{NODE_A:08x}".encode() not in resp.content
+
+
+def test_network_graph_default_does_not_infer_core_link_via_client(client, db):
+    node_c = 0xAAAA0003
+    with db:
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_A, "A", "A", "ROUTER", NOW),
+        )
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_B, "B", "B", "CLIENT", NOW),
+        )
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (node_c, "C", "C", "CLIENT_BASE", NOW),
+        )
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_A, link_end=NODE_B)
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_B, link_end=node_c)
+    resp = client.get("/graph/network?format=svg")
+    assert resp.status_code == 200
+    assert f"!{NODE_A:08x}".encode() not in resp.content
+    assert f"!{node_c:08x}".encode() not in resp.content
 
 
 # ---------------------------------------------------------------------------
