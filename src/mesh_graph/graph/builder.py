@@ -252,6 +252,8 @@ def build_trace_graph(
             attrs["style"] = "dashed"
             attrs["dir"] = "back"
             attrs["label"] = back_label
+        if rec["out_style"] == "bold":
+            attrs["weight"] = 2 # this is the fast-path route
         G.add_edge(e0, e1, **attrs)
 
     from_str = _node_str(from_id)
