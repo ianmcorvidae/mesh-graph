@@ -8,11 +8,25 @@
 - Requires Python 3.11+ and Graphviz (`apt install graphviz` or `brew install graphviz`)
 
 ### Running the Server
+
+**Default (both ingestion and API):**
 ```sh
 uv run mesh-graph --config config.toml
-# or
-uv run python -m mesh_graph.main --config config.toml
 ```
+
+**Run separately:**
+```sh
+# Terminal 1: Ingestion only (MQTT data collection to DB)
+uv run mesh-graph --config config.toml --mode ingestion
+
+# Terminal 2: API only (serves graph queries from existing DB)
+uv run mesh-graph --config config.toml --mode api
+```
+
+**Modes:**
+- `--mode both` (default): Run MQTT ingestion and HTTP API in the same process
+- `--mode ingestion`: Run only the MQTT data collection thread (requires shared DB)
+- `--mode api`: Run only the HTTP API server (requires an existing, populated DB)
 
 ### Testing
 - Full test suite: `uv run pytest`

@@ -51,11 +51,21 @@ The default value is the public default Meshtastic key.
 uv run mesh-graph --config config.toml
 ```
 
-Or directly:
+Or run as separate processes:
 
 ```sh
-uv run python -m mesh_graph.main --config config.toml
+# Terminal 1: MQTT ingestion only
+uv run mesh-graph --config config.toml --mode ingestion
+
+# Terminal 2: API only (requires existing DB from ingestion)
+uv run mesh-graph --config config.toml --mode api
 ```
+
+### Run Modes
+
+- `--mode both` (default): MQTT ingestion and HTTP API in a single process
+- `--mode ingestion`: MQTT data collection only (writes to DB)
+- `--mode api`: HTTP API server only (reads from DB)
 
 ## API
 

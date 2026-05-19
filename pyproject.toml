@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-mesh-graph = "mesh_graph.main:main"
+mesh-graph = "mesh_graph.main:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mesh_graph"]

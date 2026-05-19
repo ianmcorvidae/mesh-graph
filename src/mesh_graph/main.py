@@ -15,42 +15,67 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
-def main(config_path: str = "config.toml") -> None:
+def main(config_path: str = "config.toml", mode: str = "both") -> None:
+    if mode not in ("ingestion", "api", "both"):
+        raise ValueError(f"Invalid mode: {mode}. Must be 'ingestion', 'api', or 'both'.")
+
     cfg = load_config(config_path)
 
     conn = get_connection(cfg.db.path)
     init_db(conn)
 
-    source = MQTTDataSource(
-        broker=cfg.mqtt.broker,
-        port=cfg.mqtt.port,
-        username=cfg.mqtt.username,
-        password=cfg.mqtt.password,
-        topic=cfg.mqtt.topic,
-        encryption_key=cfg.mqtt.encryption_key,
-    )
+    source = None
+    if mode in ("ingestion", "both"):
+        source = MQTTDataSource(
+            broker=cfg.mqtt.broker,
+            port=cfg.mqtt.port,
+            username=cfg.mqtt.username,
+            password=cfg.mqtt.password,
+            topic=cfg.mqtt.topic,
+            encryption_key=cfg.mqtt.encryption_key,
+        )
 
-    logger.info("Starting MQTT ingestion from %s:%d", cfg.mqtt.broker, cfg.mqtt.port)
-    source.start(cfg.db.path)
+        logger.info("Starting MQTT ingestion from %s:%d", cfg.mqtt.broker, cfg.mqtt.port)
+        source.start(cfg.db.path)
 
     def _shutdown(sig, frame):
         logger.info("Shutting down…")
-        source.stop()
+        if source:
+            source.stop()
         conn.close()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    app = create_app(conn)
-    logger.info("Starting API on %s:%d", cfg.api.host, cfg.api.port)
-    uvicorn.run(app, host=cfg.api.host, port=cfg.api.port)
+    if mode in ("api", "both"):
+        app = create_app(conn)
+        logger.info("Starting API on %s:%d", cfg.api.host, cfg.api.port)
+        uvicorn.run(app, host=cfg.api.host, port=cfg.api.port)
+    elif mode == "ingestion":
+        logger.info("Ingestion mode: running indefinitely. Press Ctrl+C to stop.")
+        try:
+            while True:
+                signal.pause()
+        except KeyboardInterrupt:
+            _shutdown(None, None)
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """CLI entry point called by console script."""
     import argparse
 
     parser = argparse.ArgumentParser(description="mesh-graph server")
     parser.add_argument("--config", default="config.toml", help="Path to config.toml")
+    parser.add_argument(
+        "--mode",
+        choices=["ingestion", "api", "both"],
+        default="both",
+        help="Run mode: 'ingestion' (MQTT data collection only), 'api' (HTTP server only), or 'both' (default)",
+    )
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, args.mode)
+
+
+if __name__ == "__main__":
+    cli()
