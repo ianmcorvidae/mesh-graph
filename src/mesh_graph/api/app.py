@@ -8,14 +8,15 @@ from typing import List, Literal, Optional
 from fastapi import FastAPI, HTTPException, Query, Response
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
+from mesh_graph.config import ObservabilityConfig
 from mesh_graph.db import get_connection, get_links_for_network, init_db
 from mesh_graph.graph.builder import (
-    build_network_graph,
     build_node_graph,
     build_simple_network_graph,
     build_trace_graph,
 )
 from mesh_graph.graph.renderer import render
+from mesh_graph.observability import instrument_fastapi, traced_span
 
 _MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
 
@@ -52,92 +53,126 @@ def _parse_time_range(start: Optional[str], end: Optional[str]) -> tuple[Optiona
         raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
 
-def create_app(db: sqlite3.Connection) -> FastAPI:
+def create_app(db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None) -> FastAPI:
     app = FastAPI(title="mesh-graph")
+    if observability_cfg and observability_cfg.enabled:
+        instrument_fastapi(app)
 
     @app.get("/graph/network")
     def graph_network(
-        format: str = Query(default="png"),
+        format: str = Query(default="svg"),
         start: Optional[str] = Query(default=None),
         end: Optional[str] = Query(default=None),
+        snr_labels: bool = Query(default=False),
+        include_unknown_nodes: bool = Query(default=False),
     ):
-        if format not in _MEDIA_TYPES:
-            raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
-        start_ts, end_ts = _parse_time_range(start, end)
-        G = build_network_graph(db, start_ts=start_ts, end_ts=end_ts)
-        return Response(content=render(G, format), media_type=_MEDIA_TYPES[format])
-
-    @app.get("/graph/network/simple")
-    def graph_network_simple(
-        format: str = Query(default="png"),
-        start: Optional[str] = Query(default=None),
-        end: Optional[str] = Query(default=None),
-    ):
-        if format not in _MEDIA_TYPES:
-            raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
-        start_ts, end_ts = _parse_time_range(start, end)
-        G = build_simple_network_graph(db, start_ts=start_ts, end_ts=end_ts)
-        return Response(content=render(G, format), media_type=_MEDIA_TYPES[format])
+        with traced_span(
+            "api.graph.network",
+            warn_ms=5000,
+            attributes={
+                "format": format,
+                "snr_labels": snr_labels,
+                "include_unknown_nodes": include_unknown_nodes,
+            },
+        ):
+            if format not in _MEDIA_TYPES:
+                raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
+            with traced_span("parse_time_range", warn_ms=50):
+                start_ts, end_ts = _parse_time_range(start, end)
+            with traced_span("graph.build_simple_network_graph", warn_ms=2000) as span:
+                G = build_simple_network_graph(
+                    db,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    include_snr_labels=snr_labels,
+                    include_unknown_nodes=include_unknown_nodes,
+                )
+                span.set_attribute("graph.node_count", len(G.nodes))
+                span.set_attribute("graph.edge_count", len(G.edges))
+            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "sfdp"}) as span:
+                content = render(G, format, layout_prog="sfdp")
+                span.set_attribute("output.bytes", len(content))
+            return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/graph/trace/{trace_id}")
     def graph_trace(
         trace_id: int,
-        format: str = Query(default="png"),
+        format: str = Query(default="svg"),
         from_node: Optional[str] = Query(default=None, alias="from"),
         to_node: Optional[str] = Query(default=None, alias="to"),
         date: Optional[str] = Query(default=None),
     ):
-        if format not in _MEDIA_TYPES:
-            raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
-        try:
-            from_id = _parse_node_id(from_node) if from_node is not None else None
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
-        try:
-            to_id = _parse_node_id(to_node) if to_node is not None else None
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
-        try:
-            approx_ts = _parse_iso(date)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
+        with traced_span("api.graph.trace", warn_ms=5000, attributes={"format": format, "trace_id": trace_id}):
+            if format not in _MEDIA_TYPES:
+                raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
+            try:
+                from_id = _parse_node_id(from_node) if from_node is not None else None
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
+            try:
+                to_id = _parse_node_id(to_node) if to_node is not None else None
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
+            try:
+                approx_ts = _parse_iso(date)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
-        G = build_trace_graph(
-            db,
-            trace_id=trace_id,
-            from_id=from_id,
-            to_id=to_id,
-            approx_ts=approx_ts,
-        )
-        if G is None:
-            raise HTTPException(status_code=404, detail="Trace not found")
-        return Response(content=render(G, format), media_type=_MEDIA_TYPES[format])
+            with traced_span("graph.build_trace_graph", warn_ms=2000) as span:
+                G = build_trace_graph(
+                    db,
+                    trace_id=trace_id,
+                    from_id=from_id,
+                    to_id=to_id,
+                    approx_ts=approx_ts,
+                )
+                if G is not None:
+                    span.set_attribute("graph.node_count", len(G.nodes))
+                    span.set_attribute("graph.edge_count", len(G.edges))
+            if G is None:
+                raise HTTPException(status_code=404, detail="Trace not found")
+            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}) as span:
+                content = render(G, format, layout_prog="dot")
+                span.set_attribute("output.bytes", len(content))
+            return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/graph/node/{node_id}")
     def graph_node(
         node_id: str,
-        format: str = Query(default="png"),
+        format: str = Query(default="svg"),
         start: Optional[str] = Query(default=None),
         end: Optional[str] = Query(default=None),
         direction: Literal["inbound", "outbound", "both", "network"] = Query(default="both"),
         depth: int = Query(default=1, ge=1, le=10),
     ):
-        if format not in _MEDIA_TYPES:
-            raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
-        try:
-            nid = _parse_node_id(node_id)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid node_id: {node_id!r}")
-        start_ts, end_ts = _parse_time_range(start, end)
-        G = build_node_graph(
-            db,
-            node_id=nid,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            direction=direction,
-            depth=depth,
-        )
-        return Response(content=render(G, format), media_type=_MEDIA_TYPES[format])
+        with traced_span(
+            "api.graph.node",
+            warn_ms=5000,
+            attributes={"format": format, "direction": direction, "depth": depth},
+        ):
+            if format not in _MEDIA_TYPES:
+                raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
+            try:
+                nid = _parse_node_id(node_id)
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid node_id: {node_id!r}")
+            with traced_span("parse_time_range", warn_ms=50):
+                start_ts, end_ts = _parse_time_range(start, end)
+            with traced_span("graph.build_node_graph", warn_ms=2000) as span:
+                G = build_node_graph(
+                    db,
+                    node_id=nid,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    direction=direction,
+                    depth=depth,
+                )
+                span.set_attribute("graph.node_count", len(G.nodes))
+                span.set_attribute("graph.edge_count", len(G.edges))
+            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}) as span:
+                content = render(G, format, layout_prog="dot")
+                span.set_attribute("output.bytes", len(content))
+            return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/nodes", response_model=List[NodeOut])
     def list_nodes(

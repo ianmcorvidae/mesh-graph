@@ -5,7 +5,6 @@ import networkx as nx
 
 from mesh_graph.db import init_db, upsert_node
 from mesh_graph.graph.builder import (
-    build_network_graph,
     build_simple_network_graph,
     build_trace_graph,
     build_node_graph,
@@ -43,47 +42,6 @@ def _insert(db, trace_id, from_id, to_id, link_start, link_end, snr=None, is_rep
 
 
 # ---------------------------------------------------------------------------
-# build_network_graph
-# ---------------------------------------------------------------------------
-
-def test_network_graph_contains_all_edges(db):
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
-    _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A)
-    G = build_network_graph(db)
-    assert G.number_of_edges() == 2
-
-
-def test_network_graph_time_range_filters(db):
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, ts=PAST)
-    _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A, ts=NOW)
-    G = build_network_graph(db, start_ts=NOW - 60)
-    assert G.number_of_edges() == 1
-
-
-def test_network_graph_nodes_have_color(db):
-    upsert_node(db, NODE_A, long_name="Alpha", short_name="A", role="CLIENT")
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
-    G = build_network_graph(db)
-    node_a_name = f"!{NODE_A:08x}"
-    assert node_a_name in G.nodes
-    assert "color" in G.nodes[node_a_name]
-
-
-def test_network_graph_edges_have_snr_label(db):
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=5.25)
-    G = build_network_graph(db)
-    edge_data = list(G.edges(data=True))
-    assert any("5.25" in str(d.get("label", "")) for _, _, d in edge_data)
-
-
-def test_network_graph_missing_snr_shows_question_mark(db):
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=None)
-    G = build_network_graph(db)
-    edge_data = list(G.edges(data=True))
-    assert any("?" in str(d.get("label", "")) for _, _, d in edge_data)
-
-
-# ---------------------------------------------------------------------------
 # build_simple_network_graph
 # ---------------------------------------------------------------------------
 
@@ -92,6 +50,23 @@ def test_simple_network_graph_deduplicates(db):
     _insert(db, TRACE_2, NODE_A, NODE_B, NODE_A, NODE_B)
     G = build_simple_network_graph(db)
     assert G.number_of_edges() == 1
+
+
+def test_simple_network_graph_time_range_filters(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, ts=PAST)
+    _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A, ts=NOW)
+    G = build_simple_network_graph(db, start_ts=NOW - 60)
+    assert G.number_of_edges() == 1
+
+
+def test_simple_network_graph_nodes_use_compact_labels_with_white_fill(db):
+    upsert_node(db, NODE_A, long_name="Alpha Long Name", short_name="ALPHA", role="ROUTER")
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    G = build_simple_network_graph(db)
+    node_a_name = f"!{NODE_A:08x}"
+    assert G.nodes[node_a_name]["label"] == f"{node_a_name}\nALPHA"
+    assert G.nodes[node_a_name]["style"] == "filled"
+    assert G.nodes[node_a_name]["fillcolor"] == "#ffffff"
 
 
 def test_simple_network_graph_keeps_one_edge_per_direction(db):
@@ -112,6 +87,26 @@ def test_simple_network_graph_uses_xor_color_and_snr_range_label(db):
     expected_color = f"#{((NODE_A ^ NODE_B) & 0xFFFFFF):06x}"
     assert edge["color"] == expected_color
     assert edge["label"] == "2.0..6.0dB"
+
+
+def test_simple_network_graph_can_disable_snr_labels(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=2.0)
+    _insert(db, TRACE_2, NODE_A, NODE_B, NODE_A, NODE_B, snr=6.0)
+    G = build_simple_network_graph(db, include_snr_labels=False)
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    assert "label" not in edge
+
+
+def test_simple_network_graph_can_suppress_unknown_nodes(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, "a038868c-698282d0-1")
+    G = build_simple_network_graph(db, include_unknown_nodes=False)
+    assert "a038868c-698282d0-1" not in G.nodes
+
+
+def test_simple_network_graph_can_include_unknown_nodes(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, "a038868c-698282d0-1")
+    G = build_simple_network_graph(db, include_unknown_nodes=True)
+    assert "a038868c-698282d0-1" in G.nodes
 
 
 # ---------------------------------------------------------------------------

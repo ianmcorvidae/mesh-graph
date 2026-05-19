@@ -69,7 +69,8 @@ uv run mesh-graph --config config.toml --mode api
 ### Graph Rendering & Visualization
 - **Node coloring**: By node ID (fixed per node)
 - **Edge coloring**: Uses XOR of link start/end for deterministic but distinct colors per direction pair
-- **SNR labels**: Show signal-to-noise ratio ranges (e.g., `5..8dB`) for aggregated edges
+- **SNR labels**: Optional on `/graph/network` via `snr_labels=true`; default is off
+- **Unknown-hop nodes**: Hidden by default on `/graph/network`; opt in with `include_unknown_nodes=true`
 - **Directionality**: Graph builders support `inbound`, `outbound`, `both` (split), or `network` (legacy mixed) modes
 - Collapsed network graphs show one edge per direction (aggregating all observed paths)
 

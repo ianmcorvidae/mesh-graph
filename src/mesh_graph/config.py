@@ -38,10 +38,21 @@ class DBConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    enabled: bool = False
+    service_name: str = "mesh-graph"
+    environment: str = "dev"
+    exporter: str = "otlp"
+    otlp_endpoint: str = "http://127.0.0.1:4317"
+    sample_ratio: float = 1.0
+
+
+@dataclass
 class Config:
     mqtt: MQTTConfig
     api: APIConfig = field(default_factory=APIConfig)
     db: DBConfig = field(default_factory=DBConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
 
 
 def load_config(path: str) -> Config:
@@ -62,5 +73,12 @@ def load_config(path: str) -> Config:
     mqtt = MQTTConfig(**{k: v for k, v in mqtt_data.items() if k in MQTTConfig.__dataclass_fields__})
     api = APIConfig(**{k: v for k, v in data.get("api", {}).items() if k in APIConfig.__dataclass_fields__})
     db = DBConfig(**{k: v for k, v in data.get("db", {}).items() if k in DBConfig.__dataclass_fields__})
+    observability = ObservabilityConfig(
+        **{
+            k: v
+            for k, v in data.get("observability", {}).items()
+            if k in ObservabilityConfig.__dataclass_fields__
+        }
+    )
 
-    return Config(mqtt=mqtt, api=api, db=db)
+    return Config(mqtt=mqtt, api=api, db=db, observability=observability)

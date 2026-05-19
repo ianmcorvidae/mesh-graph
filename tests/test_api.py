@@ -57,12 +57,12 @@ def _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B,
 # /graph/network
 # ---------------------------------------------------------------------------
 
-def test_network_graph_returns_png_by_default(client, db):
+def test_network_graph_returns_svg_by_default(client, db):
     _insert(db)
     resp = client.get("/graph/network")
     assert resp.status_code == 200
-    assert resp.headers["content-type"] == "image/png"
-    assert resp.content[:4] == b"\x89PNG"
+    assert resp.headers["content-type"] == "image/svg+xml"
+    assert b"<svg" in resp.content
 
 
 def test_network_graph_returns_svg(client, db):
@@ -86,19 +86,82 @@ def test_network_graph_invalid_format(client, db):
     assert resp.status_code == 400
 
 
-def test_network_simple_graph_returns_svg(client, db):
+def test_network_graph_can_include_snr_labels(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=3.5)
+    resp = client.get("/graph/network?format=svg&snr_labels=true")
+    assert resp.status_code == 200
+    assert b"3.5dB" in resp.content
+
+
+def test_network_graph_suppresses_unknown_nodes_by_default(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start="a038868c-698282d0-1", link_end=NODE_B)
+    resp = client.get("/graph/network?format=svg")
+    assert resp.status_code == 200
+    assert b"a038868c" not in resp.content
+
+
+def test_network_graph_can_include_unknown_nodes(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
+    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true")
+    assert resp.status_code == 200
+    assert b"a038868c" in resp.content
+
+
+def test_network_graph_suppresses_snr_labels_by_default(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
     _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
-    resp = client.get("/graph/network/simple?format=svg")
+    resp = client.get("/graph/network?format=svg")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
+    assert b"2.0..6.0dB" not in resp.content
+
+
+def test_network_graph_can_include_snr_range_labels(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
+    _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
+    resp = client.get("/graph/network?format=svg&snr_labels=true")
+    assert resp.status_code == 200
     assert b"2.0..6.0dB" in resp.content
 
 
-def test_network_simple_graph_time_range_accepted(client, db):
+def test_network_graph_route_does_not_exist(client, db):
+    _insert(db)
+    resp = client.get("/graph/network/simple")
+    assert resp.status_code == 404
+
+
+def test_network_graph_suppresses_unknown_nodes_by_default_on_collapsed_view(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
+    resp = client.get("/graph/network?format=svg")
+    assert resp.status_code == 200
+    assert b"a038868c" not in resp.content
+
+
+def test_network_graph_can_include_unknown_nodes_on_collapsed_view(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end="a038868c-698282d0-1")
+    resp = client.get("/graph/network?format=svg&include_unknown_nodes=true")
+    assert resp.status_code == 200
+    assert b"a038868c" in resp.content
+
+
+def test_network_graph_uses_compact_labels(client, db):
+    with db:
+        db.execute(
+            "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
+            (NODE_A, "Alpha Long Name", "ALPHA", "CLIENT", NOW),
+        )
+    _insert(db, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    resp = client.get("/graph/network")
+    assert resp.status_code == 200
+    assert f"!{NODE_A:08x}".encode() in resp.content
+    assert b"ALPHA" in resp.content
+    assert b"Alpha Long Name" not in resp.content
+
+
+def test_network_graph_time_range_collapsed_accepted(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, ts=PAST)
     _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, ts=NOW)
-    resp = client.get(f"/graph/network/simple?start={_iso(NOW - 60)}")
+    resp = client.get(f"/graph/network?start={_iso(NOW - 60)}")
     assert resp.status_code == 200
 
 
@@ -106,11 +169,11 @@ def test_network_simple_graph_time_range_accepted(client, db):
 # /graph/trace/{trace_id}
 # ---------------------------------------------------------------------------
 
-def test_trace_graph_returns_png(client, db):
+def test_trace_graph_returns_svg_by_default(client, db):
     _insert(db)
     resp = client.get(f"/graph/trace/{TRACE_1}")
     assert resp.status_code == 200
-    assert resp.content[:4] == b"\x89PNG"
+    assert b"<svg" in resp.content
 
 
 def test_trace_graph_returns_svg(client, db):
@@ -174,11 +237,11 @@ def test_trace_graph_invalid_date_returns_422(client, db):
 # /graph/node/{node_id}
 # ---------------------------------------------------------------------------
 
-def test_node_graph_returns_png(client, db):
+def test_node_graph_returns_svg_by_default(client, db):
     _insert(db)
     resp = client.get(f"/graph/node/!{NODE_A:08x}")
     assert resp.status_code == 200
-    assert resp.content[:4] == b"\x89PNG"
+    assert b"<svg" in resp.content
 
 
 def test_node_graph_returns_svg(client, db):

@@ -25,6 +25,14 @@ def test_valid_full_config(tmp_path):
 
         [db]
         path = "/tmp/test.db"
+
+        [observability]
+        enabled = true
+        service_name = "mesh-graph-test"
+        environment = "ci"
+        exporter = "console"
+        otlp_endpoint = "http://collector:4317"
+        sample_ratio = 0.25
     """, tmp_path)
     cfg = load_config(path)
     assert cfg.mqtt.broker == "mqtt.example.com"
@@ -36,6 +44,12 @@ def test_valid_full_config(tmp_path):
     assert cfg.api.host == "127.0.0.1"
     assert cfg.api.port == 9090
     assert cfg.db.path == "/tmp/test.db"
+    assert cfg.observability.enabled is True
+    assert cfg.observability.service_name == "mesh-graph-test"
+    assert cfg.observability.environment == "ci"
+    assert cfg.observability.exporter == "console"
+    assert cfg.observability.otlp_endpoint == "http://collector:4317"
+    assert cfg.observability.sample_ratio == 0.25
 
 
 def test_defaults_applied(tmp_path):
@@ -51,6 +65,12 @@ def test_defaults_applied(tmp_path):
     assert cfg.api.host == "0.0.0.0"
     assert cfg.api.port == 8080
     assert cfg.db.path == "trace-graph.db"
+    assert cfg.observability.enabled is False
+    assert cfg.observability.service_name == "mesh-graph"
+    assert cfg.observability.environment == "dev"
+    assert cfg.observability.exporter == "otlp"
+    assert cfg.observability.otlp_endpoint == "http://127.0.0.1:4317"
+    assert cfg.observability.sample_ratio == 1.0
 
 
 def test_missing_broker_raises(tmp_path):

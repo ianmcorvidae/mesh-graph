@@ -10,6 +10,7 @@ from mesh_graph.api.app import create_app
 from mesh_graph.config import load_config
 from mesh_graph.db import get_connection, init_db
 from mesh_graph.ingestion.mqtt import MQTTDataSource
+from mesh_graph.observability import configure_observability
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ def main(config_path: str = "config.toml", mode: str = "both") -> None:
         raise ValueError(f"Invalid mode: {mode}. Must be 'ingestion', 'api', or 'both'.")
 
     cfg = load_config(config_path)
+    configure_observability(cfg.observability)
 
     conn = get_connection(cfg.db.path)
     init_db(conn)
@@ -49,7 +51,7 @@ def main(config_path: str = "config.toml", mode: str = "both") -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     if mode in ("api", "both"):
-        app = create_app(conn)
+        app = create_app(conn, observability_cfg=cfg.observability)
         logger.info("Starting API on %s:%d", cfg.api.host, cfg.api.port)
         uvicorn.run(app, host=cfg.api.host, port=cfg.api.port)
     elif mode == "ingestion":

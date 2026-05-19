@@ -40,10 +40,47 @@ port = 8080
 
 [db]
 path = "trace-graph.db"
+
+[observability]
+enabled = false
+service_name = "mesh-graph"
+environment = "dev"
+exporter = "otlp" # "otlp" or "console"
+otlp_endpoint = "http://127.0.0.1:4317"
+sample_ratio = 1.0
 ```
 
 `encryption_key` is the base64-encoded AES key for the Meshtastic channel.
 The default value is the public default Meshtastic key.
+
+## Observability (OpenTelemetry)
+
+The API can emit traces and metrics through OpenTelemetry.
+
+1. Start Jaeger:
+
+```sh
+docker compose -f docker-compose.observability.yml up -d
+```
+
+This compose file runs Jaeger all-in-one `2.18.0` (v2 configuration model).
+
+2. Enable observability in `config.toml`:
+
+```toml
+[observability]
+enabled = true
+service_name = "mesh-graph"
+environment = "dev"
+exporter = "otlp"
+otlp_endpoint = "http://127.0.0.1:4317"
+sample_ratio = 1.0
+```
+
+3. Run the server and generate traffic, then open Jaeger UI at `http://localhost:16686`.
+
+The `/graph/*` endpoints include stage spans for time parsing, DB fetches, graph building, and Graphviz rendering.
+When using `exporter = "otlp"` with Jaeger, trace export is enabled; metrics are not exported to Jaeger.
 
 ## Running
 
@@ -69,22 +106,31 @@ uv run mesh-graph --config config.toml --mode api
 
 ## API
 
-All graph endpoints accept `?format=png` (default) or `?format=svg`.
+All graph endpoints accept `?format=svg` (default) or `?format=png`.
 
 ### Graphs
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /graph/network` | Full network-wide graph of all observed routes |
-| `GET /graph/network/simple` | Collapsed directional graph (one edge per direction) with SNR range labels |
+| `GET /graph/network` | Collapsed directional graph (one edge per direction) |
 | `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default) |
 | `GET /graph/node/{node_id}` | Collapsed neighborhood graph around a specific node |
 
-`/graph/network`, `/graph/network/simple`, and `/graph/node/{node_id}` accept optional time-range filters:
+`/graph/network` and `/graph/node/{node_id}` accept optional time-range filters:
 
 ```
 ?start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z
 ```
+
+`/graph/network` also accepts:
+
+```
+?snr_labels=true
+?include_unknown_nodes=true
+```
+
+- `snr_labels`: include edge SNR labels (defaults to `false` for readability/performance)
+- `include_unknown_nodes`: include synthetic unknown-hop nodes (defaults to `false`)
 
 `/graph/trace/{trace_id}` also accepts optional selectors when `trace_id` is not unique:
 
@@ -139,11 +185,14 @@ Both data endpoints support timestamp cursor pagination:
 ### Examples
 
 ```sh
-# Save current network graph as PNG
-curl http://localhost:8080/graph/network -o network.png
+# Save current network graph as SVG (default)
+curl http://localhost:8080/graph/network -o network.svg
 
-# Save simplified network graph as SVG (collapsed links + SNR ranges)
-curl "http://localhost:8080/graph/network/simple?format=svg" -o network-simple.svg
+# Save network graph as SVG (collapsed links)
+curl "http://localhost:8080/graph/network?format=svg" -o network.svg
+
+# Include SNR labels on network graph
+curl "http://localhost:8080/graph/network?format=svg&snr_labels=true" -o network-labeled.svg
 
 # SVG of all routes through a specific node
 curl "http://localhost:8080/graph/node/!aabbccdd?format=svg" -o node.svg
@@ -154,8 +203,8 @@ curl "http://localhost:8080/graph/node/!aabbccdd?format=svg&direction=outbound&d
 # Trace graph disambiguated by endpoint pair and approximate date
 curl "http://localhost:8080/graph/trace/12345?from=!aabbccdd&to=!eeff0011&date=2024-01-01T12:00:00Z" -o trace.svg
 
-# Network graph for the last hour
-curl "http://localhost:8080/graph/network?start=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" -o recent.png
+# Network graph for the last hour as PNG
+curl "http://localhost:8080/graph/network?format=png&start=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" -o recent.png
 ```
 
 ## Running tests

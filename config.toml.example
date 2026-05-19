@@ -13,3 +13,11 @@ port = 8080
 
 [db]
 path = "trace-graph.db"
+
+[observability]
+enabled = false
+service_name = "mesh-graph"
+environment = "dev"
+exporter = "otlp" # "otlp" or "console"
+otlp_endpoint = "http://127.0.0.1:4317"
+sample_ratio = 1.0

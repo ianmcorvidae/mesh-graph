@@ -3,7 +3,7 @@ import pytest
 import networkx as nx
 
 from mesh_graph.db import init_db
-from mesh_graph.graph.builder import build_network_graph
+from mesh_graph.graph.builder import build_simple_network_graph
 from mesh_graph.graph.renderer import render
 
 
@@ -19,7 +19,7 @@ def simple_graph(tmp_path):
             "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply, is_fast_path) "
             "VALUES (1, 1, 2, 1, 2, 5.0, 0, 0)"
         )
-    G = build_network_graph(conn)
+    G = build_simple_network_graph(conn)
     conn.close()
     return G
 

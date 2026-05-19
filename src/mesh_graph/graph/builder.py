@@ -6,6 +6,7 @@ from typing import Optional
 import networkx as nx
 
 from mesh_graph.db import get_links_for_network, get_links_for_trace, get_node_attrs
+from mesh_graph.observability import traced_span
 
 
 def _node_str(val) -> str:
@@ -105,48 +106,47 @@ def _add_collapsed_edges(
         )
 
 
-def build_network_graph(
-    conn: sqlite3.Connection,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
-) -> nx.MultiDiGraph:
-    G = nx.MultiDiGraph()
-    for row in get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts):
-        color = _edge_color(row["trace_id"])
-        e0 = _node_str(row["link_start"])
-        e1 = _node_str(row["link_end"])
-        style = "dashed" if row["is_reply"] else "solid"
-        G.add_edge(e0, e1, color=color, fontcolor=color, style=style, label=_snr_label(row["snr"]))
-    nx.set_node_attributes(G, get_node_attrs(conn))
-    return G
-
-
 def build_simple_network_graph(
     conn: sqlite3.Connection,
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
+    include_snr_labels: bool = True,
+    include_unknown_nodes: bool = True,
 ) -> nx.DiGraph:
-    G = nx.DiGraph()
-    edge_snrs: dict[tuple[str, str], list[float]] = {}
+    with traced_span(
+        "graph.build_simple_network_graph",
+        warn_ms=2000,
+        attributes={"graph.start_ts": start_ts, "graph.end_ts": end_ts},
+    ) as span:
+        G = nx.DiGraph()
+        edge_snrs: dict[tuple[str, str], list[float]] = {}
 
-    for row in get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts):
-        e0 = _node_str(row["link_start"])
-        e1 = _node_str(row["link_end"])
-        key = (e0, e1)
-        if key not in edge_snrs:
-            edge_snrs[key] = []
-        if row["snr"] is not None:
-            edge_snrs[key].append(float(row["snr"]))
+        rows = get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts)
+        span.set_attribute("graph.input_rows", len(rows))
+        for row in rows:
+            if not include_unknown_nodes and (not isinstance(row["link_start"], int) or not isinstance(row["link_end"], int)):
+                continue
+            e0 = _node_str(row["link_start"])
+            e1 = _node_str(row["link_end"])
+            key = (e0, e1)
+            if key not in edge_snrs:
+                edge_snrs[key] = []
+            if row["snr"] is not None:
+                edge_snrs[key].append(float(row["snr"]))
 
-        if not G.has_edge(e0, e1):
-            color = _xor_link_color(row["link_start"], row["link_end"])
-            G.add_edge(e0, e1, color=color, fontcolor=color, style="solid")
+            if not G.has_edge(e0, e1):
+                color = _xor_link_color(row["link_start"], row["link_end"])
+                G.add_edge(e0, e1, color=color, fontcolor=color, style="solid")
 
-    for (e0, e1), snrs in edge_snrs.items():
-        G[e0][e1]["label"] = _snr_range_label(snrs)
+        if include_snr_labels:
+            for (e0, e1), snrs in edge_snrs.items():
+                G[e0][e1]["label"] = _snr_range_label(snrs)
 
-    nx.set_node_attributes(G, get_node_attrs(conn))
-    return G
+        nx.set_node_attributes(G, get_node_attrs(conn, label_mode="compact"))
+        nx.set_node_attributes(G, {n: {"style": "filled", "fillcolor": "#ffffff"} for n in G.nodes})
+        span.set_attribute("graph.node_count", len(G.nodes))
+        span.set_attribute("graph.edge_count", len(G.edges))
+        return G
 
 
 def build_trace_graph(

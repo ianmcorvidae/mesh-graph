@@ -4,6 +4,8 @@ import sqlite3
 import time
 from typing import Optional
 
+from mesh_graph.observability import traced_span
+
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -77,31 +79,46 @@ def _node_id_str(nodenum: int) -> str:
     return f"!{nodenum:08x}"
 
 
-def get_node_attrs(conn: sqlite3.Connection) -> dict:
-    attrs: dict = {}
+def get_node_attrs(conn: sqlite3.Connection, label_mode: str = "full") -> dict:
+    if label_mode not in {"full", "compact"}:
+        raise ValueError(f"Unsupported label_mode '{label_mode}'")
 
-    for row in conn.execute("SELECT nodenum, long_name, short_name, role FROM nodes"):
-        nodenum = row["nodenum"]
-        name = _node_id_str(nodenum)
-        label = name
-        if row["long_name"]:
-            label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
-        color = _node_color(nodenum)
-        shape = _role_shape(row["role"])
-        entry = {"label": label, "color": color}
-        if shape:
-            entry["shape"] = shape
-        attrs[name] = entry
+    with traced_span("db.get_node_attrs", warn_ms=500) as span:
+        attrs: dict = {}
+        node_rows = 0
+        for row in conn.execute("SELECT nodenum, long_name, short_name, role FROM nodes"):
+            node_rows += 1
+            nodenum = row["nodenum"]
+            name = _node_id_str(nodenum)
+            label = name
+            if label_mode == "compact" and row["short_name"]:
+                label = f"{name}\n{row['short_name']}"
+            elif label_mode == "full" and row["long_name"]:
+                label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
+            color = _node_color(nodenum)
+            shape = _role_shape(row["role"])
+            entry = {"label": label, "color": color}
+            if shape:
+                entry["shape"] = shape
+            attrs[name] = entry
 
-    # Ensure every node that appears in links has at least a stub entry
-    for row in conn.execute("SELECT DISTINCT link_start, link_end FROM traceroute_link WHERE typeof(link_start)='integer' OR typeof(link_end)='integer'"):
-        for val in (row["link_start"], row["link_end"]):
-            if isinstance(val, int):
-                name = _node_id_str(val)
-                if name not in attrs:
-                    attrs[name] = {"label": name, "color": _node_color(val)}
-
-    return attrs
+        # Ensure every node that appears in links has at least a stub entry
+        stub_rows = 0
+        for row in conn.execute(
+            "SELECT DISTINCT link_start, link_end FROM traceroute_link "
+            "WHERE typeof(link_start)='integer' OR typeof(link_end)='integer'"
+        ):
+            stub_rows += 1
+            for val in (row["link_start"], row["link_end"]):
+                if isinstance(val, int):
+                    name = _node_id_str(val)
+                    if name not in attrs:
+                        attrs[name] = {"label": name, "color": _node_color(val)}
+        span.set_attribute("db.nodes_rows", node_rows)
+        span.set_attribute("db.stub_rows", stub_rows)
+        span.set_attribute("db.attrs_count", len(attrs))
+        span.set_attribute("db.label_mode", label_mode)
+        return attrs
 
 
 def _node_color(nodenum: int) -> str:
@@ -124,15 +141,22 @@ def get_links_for_network(
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
 ) -> list[sqlite3.Row]:
-    query = "SELECT * FROM traceroute_link WHERE 1=1"
-    params: list = []
-    if start_ts is not None:
-        query += " AND ts >= ?"
-        params.append(start_ts)
-    if end_ts is not None:
-        query += " AND ts <= ?"
-        params.append(end_ts)
-    return conn.execute(query, params).fetchall()
+    with traced_span(
+        "db.get_links_for_network",
+        warn_ms=500,
+        attributes={"db.start_ts": start_ts, "db.end_ts": end_ts},
+    ) as span:
+        query = "SELECT * FROM traceroute_link WHERE 1=1"
+        params: list = []
+        if start_ts is not None:
+            query += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            query += " AND ts <= ?"
+            params.append(end_ts)
+        rows = conn.execute(query, params).fetchall()
+        span.set_attribute("db.row_count", len(rows))
+        return rows
 
 
 def get_links_for_trace(

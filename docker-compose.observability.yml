@@ -1,0 +1,9 @@
+services:
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.18.0
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "5778:5778"   # Agent config
+      - "9411:9411"   # Zipkin-compatible ingest
