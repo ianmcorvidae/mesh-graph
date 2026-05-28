@@ -198,24 +198,8 @@ def test_traceroute_records_uplink_observation(db, source):
     ).fetchone()
     assert row is not None
     assert row["uplink_id"] == GATEWAY_ID
-
-
-def test_traceroute_uplink_first_seen_is_not_overwritten(db, source):
-    payload = _make_traceroute_se(gateway_id=GATEWAY_ID)
-    source.handle_message(db, payload)
-    with db:
-        db.execute(
-            "UPDATE traceroute_uplink SET first_seen_ts = ? "
-            "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
-            (123, TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
-        )
-    source.handle_message(db, payload)
-    row = db.execute(
-        "SELECT first_seen_ts FROM traceroute_uplink "
-        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
-        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
-    ).fetchone()
-    assert row["first_seen_ts"] == 123
+    assert row["is_reply"] == 0
+    assert row["prev_node"] == FROM_ID  # no route hops → origin
 
 
 def test_traceroute_records_multiple_uplinks_for_same_trace(db, source):
@@ -243,16 +227,16 @@ def test_traceroute_records_hop_fields_on_uplink(db, source):
     assert row["hop_limit"] == 4
 
 
-def test_traceroute_uplink_fills_missing_hop_fields_later(db, source):
-    source.handle_message(db, _make_traceroute_se(gateway_id=GATEWAY_ID))
-    source.handle_message(db, _make_traceroute_se(gateway_id=GATEWAY_ID, hop_start=6, hop_limit=5))
-    row = db.execute(
-        "SELECT hop_start, hop_limit FROM traceroute_uplink "
-        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
-        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
-    ).fetchone()
-    assert row["hop_start"] == 6
-    assert row["hop_limit"] == 5
+def test_traceroute_uplink_idempotent_on_duplicate_ingest(db, source):
+    """Ingesting the same packet twice must not create a second row."""
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID)
+    source.handle_message(db, payload)
+    source.handle_message(db, payload)
+    count = db.execute(
+        "SELECT COUNT(*) FROM traceroute_uplink WHERE trace_id = ? AND from_id = ? AND to_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchone()[0]
+    assert count == 1
 
 
 def test_traceroute_uplink_ignores_invalid_hop_values(db, source):
@@ -265,6 +249,88 @@ def test_traceroute_uplink_ignores_invalid_hop_values(db, source):
     ).fetchone()
     assert row["hop_start"] is None
     assert row["hop_limit"] is None
+
+
+def test_traceroute_outbound_prev_node_is_origin_when_route_empty(db, source):
+    """No intermediate hops → prev_node should be the traceroute origin."""
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID, route=None)
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 0",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchone()
+    assert row["prev_node"] == FROM_ID
+
+
+def test_traceroute_outbound_prev_node_is_last_route_hop(db, source):
+    """With intermediate hops, prev_node should be the last hop in route."""
+    HOP_A = 0xAAAA1111
+    HOP_B = 0xAAAA2222
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID, route=[HOP_A, HOP_B])
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 0",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchone()
+    assert row["prev_node"] == HOP_B
+
+
+def test_traceroute_reply_records_two_uplink_rows(db, source):
+    """A REPLY packet should produce one outbound row and one return-path row."""
+    HOP_FWD = 0xAAAA1111
+    HOP_BACK = 0xAAAA2222
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=GATEWAY_ID,
+        route=[HOP_FWD],
+        route_back=[HOP_BACK],
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+    rows = db.execute(
+        "SELECT is_reply, prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
+        "ORDER BY is_reply",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["is_reply"] == 0
+    assert rows[0]["prev_node"] == HOP_FWD
+    assert rows[1]["is_reply"] == 1
+    assert rows[1]["prev_node"] == HOP_BACK
+
+
+def test_traceroute_reply_prev_node_falls_back_when_routes_empty(db, source):
+    """REPLY with empty route and route_back → prev_node uses origin/destination."""
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=GATEWAY_ID,
+        route=None,
+        route_back=None,
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+    rows = db.execute(
+        "SELECT is_reply, prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
+        "ORDER BY is_reply",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchall()
+    assert len(rows) == 2
+    outbound = rows[0]
+    inbound = rows[1]
+    assert outbound["is_reply"] == 0
+    assert outbound["prev_node"] == FROM_ID   # origin of traceroute
+    assert inbound["is_reply"] == 1
+    assert inbound["prev_node"] == TO_ID      # destination of traceroute
 
 
 # ---------------------------------------------------------------------------

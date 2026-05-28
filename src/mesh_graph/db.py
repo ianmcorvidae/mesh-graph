@@ -51,24 +51,25 @@ def init_db(conn: sqlite3.Connection) -> None:
                 last_seen_ts INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        _migrate_traceroute_uplink(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS traceroute_uplink (
-                trace_id      INTEGER NOT NULL,
-                from_id       INTEGER NOT NULL,
-                to_id         INTEGER NOT NULL,
-                uplink_id     INTEGER NOT NULL,
-                first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-                hop_start     INTEGER,
-                hop_limit     INTEGER,
+                trace_id  INTEGER NOT NULL,
+                from_id   INTEGER NOT NULL,
+                to_id     INTEGER NOT NULL,
+                uplink_id INTEGER NOT NULL,
+                ts        INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                hop_start INTEGER,
+                hop_limit INTEGER,
+                is_reply  BOOLEAN NOT NULL DEFAULT 0,
+                prev_node NOT NULL,
                 FOREIGN KEY (from_id, trace_id, to_id) REFERENCES traceroute,
-                PRIMARY KEY (trace_id, from_id, to_id, uplink_id)
+                PRIMARY KEY (trace_id, from_id, to_id, uplink_id, is_reply, prev_node)
             )
         """)
-        _ensure_column(conn, "traceroute_uplink", "hop_start", "INTEGER")
-        _ensure_column(conn, "traceroute_uplink", "hop_limit", "INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS traceroute_uplink_lookup "
-            "ON traceroute_uplink(trace_id, from_id, to_id, first_seen_ts, uplink_id)"
+            "ON traceroute_uplink(trace_id, from_id, to_id, ts, uplink_id)"
         )
 
 
@@ -100,25 +101,28 @@ def record_trace_uplink(
     from_id: int,
     to_id: int,
     uplink_id: int,
+    is_reply: bool,
+    prev_node,
     hop_start: Optional[int] = None,
     hop_limit: Optional[int] = None,
 ) -> None:
     with conn:
         conn.execute(
             "INSERT OR IGNORE INTO traceroute_uplink "
-            "(trace_id, from_id, to_id, uplink_id, hop_start, hop_limit) "
-            "VALUES (?,?,?,?,?,?)",
-            (trace_id, from_id, to_id, uplink_id, hop_start, hop_limit),
+            "(trace_id, from_id, to_id, uplink_id, is_reply, prev_node, hop_start, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (trace_id, from_id, to_id, uplink_id, is_reply, prev_node, hop_start, hop_limit),
         )
-        if hop_start is not None or hop_limit is not None:
-            conn.execute(
-                "UPDATE traceroute_uplink SET "
-                "hop_start = COALESCE(hop_start, ?), "
-                "hop_limit = COALESCE(hop_limit, ?) "
-                "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
-                "AND (hop_start IS NULL OR hop_limit IS NULL)",
-                (hop_start, hop_limit, trace_id, from_id, to_id, uplink_id),
-            )
+
+
+def _migrate_traceroute_uplink(conn: sqlite3.Connection) -> None:
+    """Drop and recreate traceroute_uplink if it predates the multi-observation schema."""
+    cols = {c["name"] for c in conn.execute("PRAGMA table_info(traceroute_uplink)").fetchall()}
+    if not cols:
+        return
+    if "is_reply" in cols and "prev_node" in cols and "ts" in cols:
+        return
+    conn.execute("DROP TABLE traceroute_uplink")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
@@ -256,7 +260,7 @@ def get_uplinks_for_trace(
     return conn.execute(
         "SELECT * FROM traceroute_uplink "
         "WHERE trace_id = ? AND from_id = ? AND to_id = ? "
-        "ORDER BY first_seen_ts ASC, uplink_id ASC",
+        "ORDER BY ts ASC, uplink_id ASC, is_reply ASC",
         (trace["trace_id"], trace["from_id"], trace["to_id"]),
     ).fetchall()
 

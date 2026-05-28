@@ -40,7 +40,7 @@ def test_init_db_idempotent(db):
     assert {"traceroute", "traceroute_link", "nodes", "traceroute_uplink"}.issubset(names)
 
 
-def test_init_db_adds_hop_columns_to_existing_uplink_table():
+def test_init_db_migrates_old_uplink_table_to_new_schema():
     import sqlite3
 
     conn = sqlite3.connect(":memory:", check_same_thread=False)
@@ -62,6 +62,8 @@ def test_init_db_adds_hop_columns_to_existing_uplink_table():
                 to_id         INTEGER NOT NULL,
                 uplink_id     INTEGER NOT NULL,
                 first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                hop_start     INTEGER,
+                hop_limit     INTEGER,
                 FOREIGN KEY (from_id, trace_id, to_id) REFERENCES traceroute,
                 PRIMARY KEY (trace_id, from_id, to_id, uplink_id)
             )
@@ -69,8 +71,10 @@ def test_init_db_adds_hop_columns_to_existing_uplink_table():
     init_db(conn)
     cols = conn.execute("PRAGMA table_info(traceroute_uplink)").fetchall()
     names = {c["name"] for c in cols}
-    assert "hop_start" in names
-    assert "hop_limit" in names
+    assert "is_reply" in names
+    assert "prev_node" in names
+    assert "ts" in names
+    assert "first_seen_ts" not in names
     conn.close()
 
 
@@ -231,21 +235,21 @@ def test_get_links_for_trace_uses_approx_ts_when_selecting_candidate(db):
     assert rows[0]["to_id"] == 0x60
 
 
-def test_get_uplinks_for_trace_orders_by_first_seen(db):
+def test_get_uplinks_for_trace_orders_by_ts(db):
     with db:
         db.execute(
             "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
             (91, 0x50, 0x60, NOW),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (91, 0x50, 0x60, 0xAAAA0099, NOW + 4),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (91, 0x50, 0x60, 0xAAAA0099, NOW + 4, 0, 0x50),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (91, 0x50, 0x60, 0xAAAA0001, NOW),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (91, 0x50, 0x60, 0xAAAA0001, NOW, 0, 0x50),
         )
     rows = get_uplinks_for_trace(db, trace_id=91)
     assert [r["uplink_id"] for r in rows] == [0xAAAA0001, 0xAAAA0099]
@@ -262,14 +266,14 @@ def test_get_uplinks_for_trace_uses_same_candidate_selection(db):
             (92, 0x30, 0x40, NOW),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (92, 0x10, 0x20, 0xAAAA0001, PAST),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (92, 0x10, 0x20, 0xAAAA0001, PAST, 0, 0x10),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (92, 0x30, 0x40, 0xAAAA0002, NOW),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (92, 0x30, 0x40, 0xAAAA0002, NOW, 0, 0x30),
         )
     rows_latest = get_uplinks_for_trace(db, trace_id=92)
     assert len(rows_latest) == 1
@@ -291,9 +295,9 @@ def test_get_uplinks_for_trace_includes_hop_fields(db):
             (93, 0x50, 0x60, NOW),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts, hop_start, hop_limit) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (93, 0x50, 0x60, 0xAAAA0099, NOW, 7, 4),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_start, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (93, 0x50, 0x60, 0xAAAA0099, NOW, 0, 0x50, 7, 4),
         )
     rows = get_uplinks_for_trace(db, trace_id=93)
     assert rows[0]["hop_start"] == 7

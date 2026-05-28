@@ -51,9 +51,9 @@ def _uplink_relative_times(uplink_rows: list[sqlite3.Row]) -> dict[str, int]:
     times: dict[str, int] = {}
     if not uplink_rows:
         return times
-    base_ts = int(uplink_rows[0]["first_seen_ts"])
+    base_ts = int(uplink_rows[0]["ts"])
     for row in uplink_rows:
-        times[_node_str(row["uplink_id"])] = int(row["first_seen_ts"]) - base_ts
+        times[_node_str(row["uplink_id"])] = int(row["ts"]) - base_ts
     return times
 
 

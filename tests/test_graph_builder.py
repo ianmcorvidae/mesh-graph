@@ -202,14 +202,14 @@ def test_trace_graph_adds_relative_uplink_time_to_uplink_node_labels(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, uplink_2, NODE_B)
     with db:
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 0, NODE_A),
         )
         db.execute(
-            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
-            "VALUES (?,?,?,?,?)",
-            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4),
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4, 0, NODE_A),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
     assert G is not None

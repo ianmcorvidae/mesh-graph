@@ -181,15 +181,33 @@ class MQTTDataSource(DataSource):
                 (trace_id, from_id, to_id),
             )
         if via is not None:
+            route = rd.get("route", [])
+            outbound_prev = route[-1] if route else from_id
             record_trace_uplink(
                 conn,
                 trace_id=trace_id,
                 from_id=from_id,
                 to_id=to_id,
                 uplink_id=via,
+                is_reply=False,
+                prev_node=outbound_prev,
                 hop_start=hop_start,
                 hop_limit=hop_limit,
             )
+            if trace_direction == "REPLY":
+                route_back = rd.get("routeBack", [])
+                return_prev = route_back[-1] if route_back else to_id
+                record_trace_uplink(
+                    conn,
+                    trace_id=trace_id,
+                    from_id=from_id,
+                    to_id=to_id,
+                    uplink_id=via,
+                    is_reply=True,
+                    prev_node=return_prev,
+                    hop_start=hop_start,
+                    hop_limit=hop_limit,
+                )
 
         outbound_edges = self._build_outbound_edges(p, rd, trace_direction, is_mqtt, via, from_id, to_id)
         logger.debug("OUTBOUND edges: %s", outbound_edges)
