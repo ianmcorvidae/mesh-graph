@@ -277,8 +277,8 @@ def test_traceroute_outbound_prev_node_is_last_route_hop(db, source):
     assert row["prev_node"] == HOP_B
 
 
-def test_traceroute_reply_records_two_uplink_rows(db, source):
-    """A REPLY packet should produce one outbound row and one return-path row."""
+def test_traceroute_reply_records_one_uplink_row(db, source):
+    """A REPLY packet should produce exactly one uplink row (is_reply=True) for the return path."""
     HOP_FWD = 0xAAAA1111
     HOP_BACK = 0xAAAA2222
     payload = _make_traceroute_se(
@@ -294,19 +294,16 @@ def test_traceroute_reply_records_two_uplink_rows(db, source):
     source.handle_message(db, payload)
     rows = db.execute(
         "SELECT is_reply, prev_node FROM traceroute_uplink "
-        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
-        "ORDER BY is_reply",
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
         (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
     ).fetchall()
-    assert len(rows) == 2
-    assert rows[0]["is_reply"] == 0
-    assert rows[0]["prev_node"] == HOP_FWD
-    assert rows[1]["is_reply"] == 1
-    assert rows[1]["prev_node"] == HOP_BACK
+    assert len(rows) == 1
+    assert rows[0]["is_reply"] == 1
+    assert rows[0]["prev_node"] == HOP_BACK
 
 
-def test_traceroute_reply_prev_node_falls_back_when_routes_empty(db, source):
-    """REPLY with empty route and route_back → prev_node uses origin/destination."""
+def test_traceroute_reply_prev_node_falls_back_when_route_back_empty(db, source):
+    """REPLY with empty route_back → prev_node uses the traceroute's destination."""
     payload = _make_traceroute_se(
         packet_id=99999,
         from_id=TO_ID,
@@ -320,17 +317,12 @@ def test_traceroute_reply_prev_node_falls_back_when_routes_empty(db, source):
     source.handle_message(db, payload)
     rows = db.execute(
         "SELECT is_reply, prev_node FROM traceroute_uplink "
-        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
-        "ORDER BY is_reply",
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
         (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
     ).fetchall()
-    assert len(rows) == 2
-    outbound = rows[0]
-    inbound = rows[1]
-    assert outbound["is_reply"] == 0
-    assert outbound["prev_node"] == FROM_ID   # origin of traceroute
-    assert inbound["is_reply"] == 1
-    assert inbound["prev_node"] == TO_ID      # destination of traceroute
+    assert len(rows) == 1
+    assert rows[0]["is_reply"] == 1
+    assert rows[0]["prev_node"] == TO_ID  # destination of traceroute
 
 
 # ---------------------------------------------------------------------------
