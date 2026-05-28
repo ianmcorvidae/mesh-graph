@@ -213,9 +213,62 @@ def test_trace_graph_adds_relative_uplink_time_to_uplink_node_labels(db):
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
     assert G is not None
-    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s")
-    assert G.nodes[f"!{uplink_2:08x}"]["label"].endswith("\nUplink: +4s")
+    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s@0")
+    assert G.nodes[f"!{uplink_2:08x}"]["label"].endswith("\nUplink: +4s@0")
     assert "label" not in G.graph
+
+
+def test_trace_graph_uplink_label_shows_hop_limit(db):
+    uplink_1 = 0xAAAA0099
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink "
+            "(trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_start, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 0, NODE_A, 7, 5),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s@5")
+
+
+def test_trace_graph_uplink_label_reply_only(db):
+    uplink_1 = 0xAAAA0099
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 1, NODE_B),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    label = G.nodes[f"!{uplink_1:08x}"]["label"]
+    assert "Uplink (reply): +0s@0" in label
+    assert "Uplink: +" not in label.split("Uplink (reply):")[0]
+
+
+def test_trace_graph_uplink_label_both_directions(db):
+    uplink_1 = 0xAAAA0099
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink "
+            "(trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 0, NODE_A, 4),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink "
+            "(trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW + 2, 1, NODE_B, 3),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    label = G.nodes[f"!{uplink_1:08x}"]["label"]
+    assert "\nUplink: +0s@4\nUplink (reply): +2s@3" in label
 
 
 # ---------------------------------------------------------------------------

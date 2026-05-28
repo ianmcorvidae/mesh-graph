@@ -47,14 +47,39 @@ def _xor_link_color(link_start, link_end) -> str:
     return _edge_color(0)
 
 
-def _uplink_relative_times(uplink_rows: list[sqlite3.Row]) -> dict[str, int]:
-    times: dict[str, int] = {}
+def _uplink_label_lines(uplink_rows: list[sqlite3.Row]) -> dict[str, list[str]]:
+    """
+    Returns {node_name: [label_line, ...]} where each line covers one direction.
+    Outbound observations produce "Uplink: +Xs@H,..." and reply observations
+    produce "Uplink (reply): +Xs@H,...".  Only the lines that have observations
+    are included.  If there are only reply observations the outbound line is
+    omitted entirely.
+    """
     if not uplink_rows:
-        return times
+        return {}
     base_ts = int(uplink_rows[0]["ts"])
+    # node_name -> {"out": [...], "reply": [...]}
+    buckets: dict[str, dict[str, list[str]]] = {}
     for row in uplink_rows:
-        times[_node_str(row["uplink_id"])] = int(row["ts"]) - base_ts
-    return times
+        node_name = _node_str(row["uplink_id"])
+        b = buckets.setdefault(node_name, {"out": [], "reply": []})
+        rel_secs = int(row["ts"]) - base_ts
+        hop_limit = row["hop_limit"]
+        hop_str = str(hop_limit if hop_limit is not None else 0)
+        part = f"+{rel_secs}s@{hop_str}"
+        if row["is_reply"]:
+            b["reply"].append(part)
+        else:
+            b["out"].append(part)
+    result: dict[str, list[str]] = {}
+    for node_name, b in buckets.items():
+        lines: list[str] = []
+        if b["out"]:
+            lines.append("Uplink: " + ",".join(b["out"]))
+        if b["reply"]:
+            lines.append("Uplink (reply): " + ",".join(b["reply"]))
+        result[node_name] = lines
+    return result
 
 
 def _build_depth_map(
@@ -292,14 +317,14 @@ def build_trace_graph(
             G.add_node(n)
 
     nx.set_node_attributes(G, get_node_attrs(conn))
-    uplink_times = _uplink_relative_times(uplink_rows)
-    if uplink_times:
+    uplink_label_lines = _uplink_label_lines(uplink_rows)
+    if uplink_label_lines:
         uplink_attrs: dict[str, dict[str, str]] = {}
-        for node_name, rel_seconds in uplink_times.items():
+        for node_name, lines in uplink_label_lines.items():
             if not G.has_node(node_name):
                 continue
             existing_label = str(G.nodes[node_name].get("label", node_name))
-            uplink_attrs[node_name] = {"label": f"{existing_label}\nUplink: +{rel_seconds}s"}
+            uplink_attrs[node_name] = {"label": existing_label + "\n" + "\n".join(lines)}
         if uplink_attrs:
             nx.set_node_attributes(G, uplink_attrs)
     nx.set_node_attributes(G, {

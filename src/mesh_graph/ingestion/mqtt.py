@@ -173,7 +173,7 @@ class MQTTDataSource(DataSource):
         from_id = p["to"] if trace_direction == "REPLY" else p["from"]
         to_id = p["from"] if trace_direction == "REPLY" else p["to"]
         hop_start = self._extract_hop_field(p, "hopStart")
-        hop_limit = self._extract_hop_field(p, "hopLimit")
+        hop_limit = self._extract_hop_field(p, "hopLimit") or 0
 
         with conn:
             conn.execute(

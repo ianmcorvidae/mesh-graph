@@ -247,8 +247,8 @@ def test_traceroute_uplink_ignores_invalid_hop_values(db, source):
         "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
         (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
     ).fetchone()
-    assert row["hop_start"] is None
-    assert row["hop_limit"] is None
+    assert row["hop_start"] is None   # invalid value stays None
+    assert row["hop_limit"] == 0      # invalid value coalesced to 0
 
 
 def test_traceroute_outbound_prev_node_is_origin_when_route_empty(db, source):

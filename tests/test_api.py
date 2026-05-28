@@ -295,8 +295,8 @@ def test_trace_graph_displays_uplink_times_on_uplink_nodes(client, db):
     assert resp.status_code == 200
     assert b"!aaaa0099" in resp.content
     assert b"!aaaa00ab" in resp.content
-    assert b"Uplink: +0s" in resp.content
-    assert b"Uplink: +4s" in resp.content
+    assert b"Uplink: +0s@0" in resp.content
+    assert b"Uplink: +4s@0" in resp.content
 
 
 # ---------------------------------------------------------------------------
