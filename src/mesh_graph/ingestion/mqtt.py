@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from google.protobuf import json_format
 from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2, portnums_pb2
 
-from mesh_graph.db import get_connection, upsert_node
+from mesh_graph.db import get_connection, record_trace_uplink, upsert_node
 from mesh_graph.ingestion.base import DataSource
 
 logger = logging.getLogger(__name__)
@@ -172,18 +172,24 @@ class MQTTDataSource(DataSource):
         trace_id = p["decoded"].get("requestId", p["id"])
         from_id = p["to"] if trace_direction == "REPLY" else p["from"]
         to_id = p["from"] if trace_direction == "REPLY" else p["to"]
+        hop_start = self._extract_hop_field(p, "hopStart")
+        hop_limit = self._extract_hop_field(p, "hopLimit")
 
         with conn:
             conn.execute(
                 "INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id) VALUES (?,?,?)",
                 (trace_id, from_id, to_id),
             )
-            if via is not None:
-                conn.execute(
-                    "INSERT OR IGNORE INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id) "
-                    "VALUES (?,?,?,?)",
-                    (trace_id, from_id, to_id, via),
-                )
+        if via is not None:
+            record_trace_uplink(
+                conn,
+                trace_id=trace_id,
+                from_id=from_id,
+                to_id=to_id,
+                uplink_id=via,
+                hop_start=hop_start,
+                hop_limit=hop_limit,
+            )
 
         outbound_edges = self._build_outbound_edges(p, rd, trace_direction, is_mqtt, via, from_id, to_id)
         logger.debug("OUTBOUND edges: %s", outbound_edges)
@@ -292,3 +298,24 @@ class MQTTDataSource(DataSource):
                 after = route[i]
                 break
         return f"{before:08x}-{after:08x}-{idx - before_idx}"
+
+    @classmethod
+    def _extract_hop_field(cls, packet: dict, field: str) -> Optional[int]:
+        value = packet.get(field)
+        if value is None:
+            value = packet.get("decoded", {}).get(field)
+        return cls._normalize_hop_value(value)
+
+    @staticmethod
+    def _normalize_hop_value(value) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= normalized <= 7:
+            return normalized
+        return None

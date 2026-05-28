@@ -58,10 +58,14 @@ def init_db(conn: sqlite3.Connection) -> None:
                 to_id         INTEGER NOT NULL,
                 uplink_id     INTEGER NOT NULL,
                 first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                hop_start     INTEGER,
+                hop_limit     INTEGER,
                 FOREIGN KEY (from_id, trace_id, to_id) REFERENCES traceroute,
                 PRIMARY KEY (trace_id, from_id, to_id, uplink_id)
             )
         """)
+        _ensure_column(conn, "traceroute_uplink", "hop_start", "INTEGER")
+        _ensure_column(conn, "traceroute_uplink", "hop_limit", "INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS traceroute_uplink_lookup "
             "ON traceroute_uplink(trace_id, from_id, to_id, first_seen_ts, uplink_id)"
@@ -88,6 +92,40 @@ def upsert_node(
             """,
             (nodenum, long_name, short_name, role, int(time.time())),
         )
+
+
+def record_trace_uplink(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: int,
+    to_id: int,
+    uplink_id: int,
+    hop_start: Optional[int] = None,
+    hop_limit: Optional[int] = None,
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO traceroute_uplink "
+            "(trace_id, from_id, to_id, uplink_id, hop_start, hop_limit) "
+            "VALUES (?,?,?,?,?,?)",
+            (trace_id, from_id, to_id, uplink_id, hop_start, hop_limit),
+        )
+        if hop_start is not None or hop_limit is not None:
+            conn.execute(
+                "UPDATE traceroute_uplink SET "
+                "hop_start = COALESCE(hop_start, ?), "
+                "hop_limit = COALESCE(hop_limit, ?) "
+                "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? "
+                "AND (hop_start IS NULL OR hop_limit IS NULL)",
+                (hop_start, hop_limit, trace_id, from_id, to_id, uplink_id),
+            )
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(c["name"] == column for c in cols):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def _node_id_str(nodenum: int) -> str:
@@ -193,7 +231,8 @@ def get_links_for_trace(
     return conn.execute(
         "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
         "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
-        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ?",
+        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
+        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC",
         (trace["trace_id"], trace["from_id"], trace["to_id"]),
     ).fetchall()
 

@@ -48,6 +48,8 @@ def _make_traceroute_se(
     snr_back=None,
     want_response=True,
     request_id=None,
+    hop_start=None,
+    hop_limit=None,
 ):
     rd = mesh_pb2.RouteDiscovery()
     if route:
@@ -69,6 +71,10 @@ def _make_traceroute_se(
     mp.id = packet_id
     setattr(mp, "from", from_id)
     mp.to = to_id
+    if hop_start is not None:
+        mp.hop_start = hop_start
+    if hop_limit is not None:
+        mp.hop_limit = hop_limit
     mp.decoded.CopyFrom(data)
     if request_id is not None:
         mp.decoded.request_id = request_id
@@ -223,6 +229,42 @@ def test_traceroute_records_multiple_uplinks_for_same_trace(db, source):
         (TRACE_ID, FROM_ID, TO_ID),
     ).fetchall()
     assert [r["uplink_id"] for r in rows] == [GATEWAY_ID, 0xAAAA00AB]
+
+
+def test_traceroute_records_hop_fields_on_uplink(db, source):
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID, hop_start=7, hop_limit=4)
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT hop_start, hop_limit FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchone()
+    assert row["hop_start"] == 7
+    assert row["hop_limit"] == 4
+
+
+def test_traceroute_uplink_fills_missing_hop_fields_later(db, source):
+    source.handle_message(db, _make_traceroute_se(gateway_id=GATEWAY_ID))
+    source.handle_message(db, _make_traceroute_se(gateway_id=GATEWAY_ID, hop_start=6, hop_limit=5))
+    row = db.execute(
+        "SELECT hop_start, hop_limit FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchone()
+    assert row["hop_start"] == 6
+    assert row["hop_limit"] == 5
+
+
+def test_traceroute_uplink_ignores_invalid_hop_values(db, source):
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID, hop_start=99, hop_limit=8)
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT hop_start, hop_limit FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchone()
+    assert row["hop_start"] is None
+    assert row["hop_limit"] is None
 
 
 # ---------------------------------------------------------------------------

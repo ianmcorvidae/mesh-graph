@@ -40,6 +40,40 @@ def test_init_db_idempotent(db):
     assert {"traceroute", "traceroute_link", "nodes", "traceroute_uplink"}.issubset(names)
 
 
+def test_init_db_adds_hop_columns_to_existing_uplink_table():
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    with conn:
+        conn.execute("""
+            CREATE TABLE traceroute (
+                trace_id INTEGER NOT NULL,
+                from_id  INTEGER NOT NULL,
+                to_id    INTEGER NOT NULL,
+                first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                PRIMARY KEY (from_id, trace_id, to_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE traceroute_uplink (
+                trace_id      INTEGER NOT NULL,
+                from_id       INTEGER NOT NULL,
+                to_id         INTEGER NOT NULL,
+                uplink_id     INTEGER NOT NULL,
+                first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                FOREIGN KEY (from_id, trace_id, to_id) REFERENCES traceroute,
+                PRIMARY KEY (trace_id, from_id, to_id, uplink_id)
+            )
+        """)
+    init_db(conn)
+    cols = conn.execute("PRAGMA table_info(traceroute_uplink)").fetchall()
+    names = {c["name"] for c in cols}
+    assert "hop_start" in names
+    assert "hop_limit" in names
+    conn.close()
+
+
 # --- upsert_node / get_node_attrs ---
 
 def test_upsert_node_insert(db):
@@ -248,6 +282,22 @@ def test_get_uplinks_for_trace_uses_same_candidate_selection(db):
     assert rows_approx[0]["from_id"] == 0x10
     assert rows_approx[0]["to_id"] == 0x20
     assert rows_approx[0]["uplink_id"] == 0xAAAA0001
+
+
+def test_get_uplinks_for_trace_includes_hop_fields(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (93, 0x50, 0x60, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts, hop_start, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (93, 0x50, 0x60, 0xAAAA0099, NOW, 7, 4),
+        )
+    rows = get_uplinks_for_trace(db, trace_id=93)
+    assert rows[0]["hop_start"] == 7
+    assert rows[0]["hop_limit"] == 4
 
 
 # --- get_links_for_node ---
