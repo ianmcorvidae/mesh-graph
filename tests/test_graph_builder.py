@@ -97,6 +97,15 @@ def test_simple_network_graph_can_disable_snr_labels(db):
     assert "label" not in edge
 
 
+def test_simple_network_graph_collapses_bidirectional_edges_when_snr_labels_off(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=2.0)
+    _insert(db, TRACE_2, NODE_B, NODE_A, NODE_B, NODE_A, snr=6.0)
+    G = build_simple_network_graph(db, include_snr_labels=False)
+    assert G.number_of_edges() == 1
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    assert edge["dir"] == "both"
+
+
 def test_simple_network_graph_can_suppress_unknown_nodes(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, "a038868c-698282d0-1")
     G = build_simple_network_graph(db, include_unknown_nodes=False)

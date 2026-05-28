@@ -169,6 +169,18 @@ def build_simple_network_graph(
         if include_snr_labels:
             for (e0, e1), snrs in edge_snrs.items():
                 G[e0][e1]["label"] = _snr_range_label(snrs)
+        else:
+            for e0, e1 in list(G.edges()):
+                if e0 == e1:
+                    continue
+                if not G.has_edge(e1, e0):
+                    continue
+                keep_e0, keep_e1 = sorted((e0, e1))
+                drop_e0, drop_e1 = (e0, e1) if (e0, e1) != (keep_e0, keep_e1) else (e1, e0)
+                if G.has_edge(drop_e0, drop_e1):
+                    G.remove_edge(drop_e0, drop_e1)
+                if G.has_edge(keep_e0, keep_e1):
+                    G[keep_e0][keep_e1]["dir"] = "both"
 
         nx.set_node_attributes(G, get_node_attrs(conn, label_mode="compact"))
         nx.set_node_attributes(G, {n: {"style": "filled", "fillcolor": "#ffffff"} for n in G.nodes})
@@ -244,7 +256,7 @@ def build_trace_graph(
         if out_label is not None and back_label is not None:
             attrs["style"] = rec["out_style"]
             attrs["dir"] = "both"
-            attrs["label"] = f"{out_label}\n({back_label})"
+            attrs["label"] = f"{out_label}\n{back_label}"
         elif out_label is not None:
             attrs["style"] = rec["out_style"]
             attrs["label"] = out_label
