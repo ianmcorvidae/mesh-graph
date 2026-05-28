@@ -276,6 +276,29 @@ def test_trace_graph_invalid_date_returns_422(client, db):
     assert resp.status_code == 422
 
 
+def test_trace_graph_displays_uplink_times_on_uplink_nodes(client, db):
+    uplink_1 = 0xAAAA0099
+    uplink_2 = 0xAAAA00AB
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=uplink_1)
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=uplink_1, link_end=uplink_2)
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=uplink_2, link_end=NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) VALUES (?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) VALUES (?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4),
+        )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    assert resp.status_code == 200
+    assert b"!aaaa0099" in resp.content
+    assert b"!aaaa00ab" in resp.content
+    assert b"Uplink: +0s" in resp.content
+    assert b"Uplink: +4s" in resp.content
+
+
 # ---------------------------------------------------------------------------
 # /graph/node/{node_id}
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ from typing import Optional
 
 import networkx as nx
 
-from mesh_graph.db import get_links_for_network, get_links_for_trace, get_node_attrs
+from mesh_graph.db import get_links_for_network, get_links_for_trace, get_node_attrs, get_uplinks_for_trace
 from mesh_graph.observability import traced_span
 
 
@@ -45,6 +45,16 @@ def _xor_link_color(link_start, link_end) -> str:
     if isinstance(link_start, int):
         return _edge_color(link_start)
     return _edge_color(0)
+
+
+def _uplink_relative_times(uplink_rows: list[sqlite3.Row]) -> dict[str, int]:
+    times: dict[str, int] = {}
+    if not uplink_rows:
+        return times
+    base_ts = int(uplink_rows[0]["first_seen_ts"])
+    for row in uplink_rows:
+        times[_node_str(row["uplink_id"])] = int(row["first_seen_ts"]) - base_ts
+    return times
 
 
 def _build_depth_map(
@@ -205,6 +215,13 @@ def build_trace_graph(
     )
     if not rows:
         return None
+    uplink_rows = get_uplinks_for_trace(
+        conn,
+        trace_id=trace_id,
+        from_id=from_id,
+        to_id=to_id,
+        approx_ts=approx_ts,
+    )
 
     G = nx.MultiDiGraph()
     from_id = None
@@ -275,6 +292,16 @@ def build_trace_graph(
             G.add_node(n)
 
     nx.set_node_attributes(G, get_node_attrs(conn))
+    uplink_times = _uplink_relative_times(uplink_rows)
+    if uplink_times:
+        uplink_attrs: dict[str, dict[str, str]] = {}
+        for node_name, rel_seconds in uplink_times.items():
+            if not G.has_node(node_name):
+                continue
+            existing_label = str(G.nodes[node_name].get("label", node_name))
+            uplink_attrs[node_name] = {"label": f"{existing_label}\nUplink: +{rel_seconds}s"}
+        if uplink_attrs:
+            nx.set_node_attributes(G, uplink_attrs)
     nx.set_node_attributes(G, {
         from_str: {"style": "filled", "fillcolor": "#ffa9a9"},
         to_str: {"style": "filled", "fillcolor": "#a9a9ff"},

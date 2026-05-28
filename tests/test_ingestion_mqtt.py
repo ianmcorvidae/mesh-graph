@@ -183,6 +183,48 @@ def test_traceroute_inserts_traceroute_record(db, source):
     assert row["to_id"] == TO_ID
 
 
+def test_traceroute_records_uplink_observation(db, source):
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID)
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT * FROM traceroute_uplink WHERE trace_id = ? AND from_id = ? AND to_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchone()
+    assert row is not None
+    assert row["uplink_id"] == GATEWAY_ID
+
+
+def test_traceroute_uplink_first_seen_is_not_overwritten(db, source):
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID)
+    source.handle_message(db, payload)
+    with db:
+        db.execute(
+            "UPDATE traceroute_uplink SET first_seen_ts = ? "
+            "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+            (123, TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+        )
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT first_seen_ts FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchone()
+    assert row["first_seen_ts"] == 123
+
+
+def test_traceroute_records_multiple_uplinks_for_same_trace(db, source):
+    payload_1 = _make_traceroute_se(gateway_id=GATEWAY_ID)
+    payload_2 = _make_traceroute_se(gateway_id=0xAAAA00AB)
+    source.handle_message(db, payload_1)
+    source.handle_message(db, payload_2)
+    rows = db.execute(
+        "SELECT uplink_id FROM traceroute_uplink WHERE trace_id = ? AND from_id = ? AND to_id = ? "
+        "ORDER BY uplink_id",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchall()
+    assert [r["uplink_id"] for r in rows] == [GATEWAY_ID, 0xAAAA00AB]
+
+
 # ---------------------------------------------------------------------------
 # NODEINFO_APP
 # ---------------------------------------------------------------------------

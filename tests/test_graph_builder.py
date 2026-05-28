@@ -194,6 +194,30 @@ def test_trace_graph_highlights_from_to_nodes(db):
     assert G.graph["rank_sink_node"] == node_b_str
 
 
+def test_trace_graph_adds_relative_uplink_time_to_uplink_node_labels(db):
+    uplink_1 = 0xAAAA0099
+    uplink_2 = 0xAAAA00AB
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, uplink_2)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_2, NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    assert G is not None
+    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s")
+    assert G.nodes[f"!{uplink_2:08x}"]["label"].endswith("\nUplink: +4s")
+    assert "label" not in G.graph
+
+
 # ---------------------------------------------------------------------------
 # build_node_graph
 # ---------------------------------------------------------------------------

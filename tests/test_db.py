@@ -1,6 +1,14 @@
 import time
 import pytest
-from mesh_graph.db import init_db, upsert_node, get_node_attrs, get_links_for_network, get_links_for_trace, get_links_for_node
+from mesh_graph.db import (
+    get_links_for_network,
+    get_links_for_node,
+    get_links_for_trace,
+    get_node_attrs,
+    get_uplinks_for_trace,
+    init_db,
+    upsert_node,
+)
 
 
 NOW = int(time.time())
@@ -29,7 +37,7 @@ def test_init_db_idempotent(db):
     init_db(db)  # second call must not raise or duplicate tables
     rows = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     names = {r["name"] for r in rows}
-    assert {"traceroute", "traceroute_link", "nodes"}.issubset(names)
+    assert {"traceroute", "traceroute_link", "nodes", "traceroute_uplink"}.issubset(names)
 
 
 # --- upsert_node / get_node_attrs ---
@@ -187,6 +195,59 @@ def test_get_links_for_trace_uses_approx_ts_when_selecting_candidate(db):
     assert len(rows) == 1
     assert rows[0]["from_id"] == 0x50
     assert rows[0]["to_id"] == 0x60
+
+
+def test_get_uplinks_for_trace_orders_by_first_seen(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (91, 0x50, 0x60, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (91, 0x50, 0x60, 0xAAAA0099, NOW + 4),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (91, 0x50, 0x60, 0xAAAA0001, NOW),
+        )
+    rows = get_uplinks_for_trace(db, trace_id=91)
+    assert [r["uplink_id"] for r in rows] == [0xAAAA0001, 0xAAAA0099]
+
+
+def test_get_uplinks_for_trace_uses_same_candidate_selection(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (92, 0x10, 0x20, PAST),
+        )
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (92, 0x30, 0x40, NOW),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (92, 0x10, 0x20, 0xAAAA0001, PAST),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, first_seen_ts) "
+            "VALUES (?,?,?,?,?)",
+            (92, 0x30, 0x40, 0xAAAA0002, NOW),
+        )
+    rows_latest = get_uplinks_for_trace(db, trace_id=92)
+    assert len(rows_latest) == 1
+    assert rows_latest[0]["from_id"] == 0x30
+    assert rows_latest[0]["to_id"] == 0x40
+    assert rows_latest[0]["uplink_id"] == 0xAAAA0002
+
+    rows_approx = get_uplinks_for_trace(db, trace_id=92, approx_ts=PAST + 1)
+    assert len(rows_approx) == 1
+    assert rows_approx[0]["from_id"] == 0x10
+    assert rows_approx[0]["to_id"] == 0x20
+    assert rows_approx[0]["uplink_id"] == 0xAAAA0001
 
 
 # --- get_links_for_node ---

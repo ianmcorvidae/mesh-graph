@@ -178,6 +178,12 @@ class MQTTDataSource(DataSource):
                 "INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id) VALUES (?,?,?)",
                 (trace_id, from_id, to_id),
             )
+            if via is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id) "
+                    "VALUES (?,?,?,?)",
+                    (trace_id, from_id, to_id, via),
+                )
 
         outbound_edges = self._build_outbound_edges(p, rd, trace_direction, is_mqtt, via, from_id, to_id)
         logger.debug("OUTBOUND edges: %s", outbound_edges)

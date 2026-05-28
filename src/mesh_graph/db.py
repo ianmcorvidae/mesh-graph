@@ -51,6 +51,21 @@ def init_db(conn: sqlite3.Connection) -> None:
                 last_seen_ts INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS traceroute_uplink (
+                trace_id      INTEGER NOT NULL,
+                from_id       INTEGER NOT NULL,
+                to_id         INTEGER NOT NULL,
+                uplink_id     INTEGER NOT NULL,
+                first_seen_ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                FOREIGN KEY (from_id, trace_id, to_id) REFERENCES traceroute,
+                PRIMARY KEY (trace_id, from_id, to_id, uplink_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS traceroute_uplink_lookup "
+            "ON traceroute_uplink(trace_id, from_id, to_id, first_seen_ts, uplink_id)"
+        )
 
 
 def upsert_node(
@@ -166,6 +181,54 @@ def get_links_for_trace(
     to_id: Optional[int] = None,
     approx_ts: Optional[int] = None,
 ) -> list[sqlite3.Row]:
+    trace = _select_trace_candidate(
+        conn,
+        trace_id=trace_id,
+        from_id=from_id,
+        to_id=to_id,
+        approx_ts=approx_ts,
+    )
+    if trace is None:
+        return []
+    return conn.execute(
+        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
+        "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
+        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ?",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
+    ).fetchall()
+
+
+def get_uplinks_for_trace(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+    approx_ts: Optional[int] = None,
+) -> list[sqlite3.Row]:
+    trace = _select_trace_candidate(
+        conn,
+        trace_id=trace_id,
+        from_id=from_id,
+        to_id=to_id,
+        approx_ts=approx_ts,
+    )
+    if trace is None:
+        return []
+    return conn.execute(
+        "SELECT * FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? "
+        "ORDER BY first_seen_ts ASC, uplink_id ASC",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
+    ).fetchall()
+
+
+def _select_trace_candidate(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+    approx_ts: Optional[int] = None,
+) -> Optional[sqlite3.Row]:
     query = (
         "SELECT trace_id, from_id, to_id FROM traceroute "
         "WHERE trace_id = ?"
@@ -184,15 +247,7 @@ def get_links_for_trace(
         query += " ORDER BY first_seen_ts DESC, from_id DESC, to_id DESC"
     query += " LIMIT 1"
 
-    trace = conn.execute(query, params).fetchone()
-    if trace is None:
-        return []
-    return conn.execute(
-        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
-        "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
-        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ?",
-        (trace["trace_id"], trace["from_id"], trace["to_id"]),
-    ).fetchall()
+    return conn.execute(query, params).fetchone()
 
 
 def get_links_for_node(

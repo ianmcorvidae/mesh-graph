@@ -11,6 +11,10 @@ _SUPPORTED = {"png", "svg"}
 
 def _to_pydot(G: nx.Graph, *, layout_prog: str) -> pydot.Dot:
     pd = nx.nx_pydot.to_pydot(G)
+    for key in ("label", "labelloc"):
+        value = G.graph.get(key)
+        if isinstance(value, str):
+            pd.set(key, value)
     if layout_prog == "sfdp":
         pd.set("overlap", "prism")
         pd.set("sep", "+8")

@@ -113,7 +113,7 @@ All graph endpoints accept `?format=svg` (default) or `?format=png`.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /graph/network` | Collapsed directional graph focused on backbone nodes (ROUTER, ROUTER_LATE, CLIENT_BASE) |
-| `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default) |
+| `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default), with uplink nodes labeled with relative receive times |
 | `GET /graph/node/{node_id}` | Collapsed neighborhood graph around a specific node |
 
 `/graph/network` and `/graph/node/{node_id}` accept optional time-range filters:
@@ -145,6 +145,12 @@ When `include_clients=false`, `/graph/network` keeps only ROUTER/ROUTER_LATE/CLI
 - `from`: expected origin node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
 - `to`: expected destination node (same formats)
 - `date`: approximate traceroute timestamp (ISO 8601); the closest match is selected
+
+When available, each node in the trace graph that matches an uplink gets an extra label line like:
+
+`Uplink: +4s`
+
+The first uplink observed for that trace instance is always the `+0s` baseline, and all other uplink times are shown relative to it.
 
 `/graph/node/{node_id}` supports traversal controls:
 
