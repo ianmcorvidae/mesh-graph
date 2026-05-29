@@ -9,7 +9,6 @@ from fastapi import FastAPI, HTTPException, Query, Response
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
-from mesh_graph.db import get_connection, get_links_for_network, init_db
 from mesh_graph.graph.builder import (
     build_node_graph,
     build_simple_network_graph,
@@ -46,14 +45,18 @@ def _parse_node_id(node_id: str) -> int:
         return int(s)
 
 
-def _parse_time_range(start: Optional[str], end: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+def _parse_time_range(
+    start: Optional[str], end: Optional[str]
+) -> tuple[Optional[int], Optional[int]]:
     try:
         return _parse_iso(start), _parse_iso(end)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
 
-def create_app(db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None) -> FastAPI:
+def create_app(
+    db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None
+) -> FastAPI:
     app = FastAPI(title="mesh-graph")
     if observability_cfg and observability_cfg.enabled:
         instrument_fastapi(app)
@@ -92,7 +95,11 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
                 )
                 span.set_attribute("graph.node_count", len(G.nodes))
                 span.set_attribute("graph.edge_count", len(G.edges))
-            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "sfdp"}) as span:
+            with traced_span(
+                "renderer.render",
+                warn_ms=5000,
+                attributes={"format": format, "layout_prog": "sfdp"},
+            ) as span:
                 content = render(G, format, layout_prog="sfdp")
                 span.set_attribute("output.bytes", len(content))
             return Response(content=content, media_type=_MEDIA_TYPES[format])
@@ -105,7 +112,9 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
         to_node: Optional[str] = Query(default=None, alias="to"),
         date: Optional[str] = Query(default=None),
     ):
-        with traced_span("api.graph.trace", warn_ms=5000, attributes={"format": format, "trace_id": trace_id}):
+        with traced_span(
+            "api.graph.trace", warn_ms=5000, attributes={"format": format, "trace_id": trace_id}
+        ):
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             try:
@@ -134,7 +143,9 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
                     span.set_attribute("graph.edge_count", len(G.edges))
             if G is None:
                 raise HTTPException(status_code=404, detail="Trace not found")
-            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}) as span:
+            with traced_span(
+                "renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}
+            ) as span:
                 content = render(G, format, layout_prog="dot")
                 span.set_attribute("output.bytes", len(content))
             return Response(content=content, media_type=_MEDIA_TYPES[format])
@@ -172,15 +183,21 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
                 )
                 span.set_attribute("graph.node_count", len(G.nodes))
                 span.set_attribute("graph.edge_count", len(G.edges))
-            with traced_span("renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}) as span:
+            with traced_span(
+                "renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}
+            ) as span:
                 content = render(G, format, layout_prog="dot")
                 span.set_attribute("output.bytes", len(content))
             return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/nodes", response_model=List[NodeOut])
     def list_nodes(
-        after: Optional[int] = Query(default=None, description="Return nodes seen at or before this UNIX timestamp"),
-        limit: int = Query(default=100, ge=1, le=500, description="Maximum number of rows to return"),
+        after: Optional[int] = Query(
+            default=None, description="Return nodes seen at or before this UNIX timestamp"
+        ),
+        limit: int = Query(
+            default=100, ge=1, le=500, description="Maximum number of rows to return"
+        ),
     ):
         cursor = int(time.time()) if after is None else after
         rows = db.execute(
@@ -194,8 +211,12 @@ def create_app(db: sqlite3.Connection, observability_cfg: Optional[Observability
 
     @app.get("/traceroutes", response_model=List[TracerouteOut])
     def list_traceroutes(
-        after: Optional[int] = Query(default=None, description="Return traceroutes seen at or before this UNIX timestamp"),
-        limit: int = Query(default=100, ge=1, le=500, description="Maximum number of rows to return"),
+        after: Optional[int] = Query(
+            default=None, description="Return traceroutes seen at or before this UNIX timestamp"
+        ),
+        limit: int = Query(
+            default=100, ge=1, le=500, description="Maximum number of rows to return"
+        ),
         from_node: Optional[str] = Query(default=None, alias="from"),
         to_node: Optional[str] = Query(default=None, alias="to"),
     ):

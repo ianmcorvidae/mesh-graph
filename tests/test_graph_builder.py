@@ -1,13 +1,13 @@
 import sqlite3
 import time
+
 import pytest
-import networkx as nx
 
 from mesh_graph.db import init_db, upsert_node
 from mesh_graph.graph.builder import (
+    build_node_graph,
     build_simple_network_graph,
     build_trace_graph,
-    build_node_graph,
 )
 
 NOW = int(time.time())
@@ -29,10 +29,24 @@ def db():
     return conn
 
 
-def _insert(db, trace_id, from_id, to_id, link_start, link_end, snr=None, is_reply=0, is_fast_path=0, ts=None):
+def _insert(
+    db,
+    trace_id,
+    from_id,
+    to_id,
+    link_start,
+    link_end,
+    snr=None,
+    is_reply=0,
+    is_fast_path=0,
+    ts=None,
+):
     ts = ts or NOW
     with db:
-        db.execute("INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id) VALUES (?,?,?)", (trace_id, from_id, to_id))
+        db.execute(
+            "INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id) VALUES (?,?,?)",
+            (trace_id, from_id, to_id),
+        )
         db.execute(
             "INSERT OR IGNORE INTO traceroute_link "
             "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path) "
@@ -44,6 +58,7 @@ def _insert(db, trace_id, from_id, to_id, link_start, link_end, snr=None, is_rep
 # ---------------------------------------------------------------------------
 # build_simple_network_graph
 # ---------------------------------------------------------------------------
+
 
 def test_simple_network_graph_deduplicates(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
@@ -141,6 +156,7 @@ def test_simple_network_graph_core_only_does_not_infer_links_via_clients(db):
 # build_trace_graph
 # ---------------------------------------------------------------------------
 
+
 def test_trace_graph_isolates_single_trace(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
     _insert(db, TRACE_2, NODE_C, NODE_A, NODE_C, NODE_A)
@@ -219,7 +235,9 @@ def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
     node_e = 0xAAAA0005
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=1.0, is_reply=1)  # B->A
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_d, snr=2.0, is_reply=1)  # A->D
-    _insert(db, TRACE_1, NODE_A, NODE_B, node_e, NODE_A, snr=3.0, is_reply=1)  # E->A (incoming to A only)
+    _insert(
+        db, TRACE_1, NODE_A, NODE_B, node_e, NODE_A, snr=3.0, is_reply=1
+    )  # E->A (incoming to A only)
     G = build_trace_graph(db, trace_id=TRACE_1)
     edge_ab = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
     edge_da = G[f"!{node_d:08x}"][f"!{NODE_A:08x}"][0]
@@ -332,6 +350,7 @@ def test_trace_graph_uplink_label_both_directions(db):
 # ---------------------------------------------------------------------------
 # build_node_graph
 # ---------------------------------------------------------------------------
+
 
 def test_node_graph_includes_links_as_start(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)

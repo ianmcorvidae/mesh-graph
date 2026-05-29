@@ -1,6 +1,8 @@
 import textwrap
+
 import pytest
-from mesh_graph.config import load_config, ConfigError
+
+from mesh_graph.config import ConfigError, load_config
 
 
 def _toml(text: str, tmp_path) -> str:
@@ -10,7 +12,8 @@ def _toml(text: str, tmp_path) -> str:
 
 
 def test_valid_full_config(tmp_path):
-    path = _toml("""
+    path = _toml(
+        """
         [mqtt]
         broker = "mqtt.example.com"
         port = 1884
@@ -33,7 +36,9 @@ def test_valid_full_config(tmp_path):
         exporter = "console"
         otlp_endpoint = "http://collector:4317"
         sample_ratio = 0.25
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     cfg = load_config(path)
     assert cfg.mqtt.broker == "mqtt.example.com"
     assert cfg.mqtt.port == 1884
@@ -53,10 +58,13 @@ def test_valid_full_config(tmp_path):
 
 
 def test_defaults_applied(tmp_path):
-    path = _toml("""
+    path = _toml(
+        """
         [mqtt]
         broker = "mqtt.example.com"
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     cfg = load_config(path)
     assert cfg.mqtt.port == 1883
     assert cfg.mqtt.username == ""
@@ -74,19 +82,25 @@ def test_defaults_applied(tmp_path):
 
 
 def test_missing_broker_raises(tmp_path):
-    path = _toml("""
+    path = _toml(
+        """
         [mqtt]
         port = 1883
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     with pytest.raises(ConfigError):
         load_config(path)
 
 
 def test_missing_mqtt_section_raises(tmp_path):
-    path = _toml("""
+    path = _toml(
+        """
         [api]
         port = 8080
-    """, tmp_path)
+    """,
+        tmp_path,
+    )
     with pytest.raises(ConfigError):
         load_config(path)
 

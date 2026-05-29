@@ -1,5 +1,7 @@
 import sqlite3
+
 import pytest
+
 from mesh_graph.db import init_db
 
 

@@ -1,5 +1,5 @@
 import time
-import pytest
+
 from mesh_graph.db import (
     get_links_for_network,
     get_links_for_node,
@@ -10,13 +10,23 @@ from mesh_graph.db import (
     upsert_node,
 )
 
-
 NOW = int(time.time())
 PAST = NOW - 7200
 FUTURE = NOW + 7200
 
 
-def _insert_link(db, trace_id, from_id, to_id, link_start, link_end, snr=None, is_reply=0, is_fast_path=0, ts=None):
+def _insert_link(
+    db,
+    trace_id,
+    from_id,
+    to_id,
+    link_start,
+    link_end,
+    snr=None,
+    is_reply=0,
+    is_fast_path=0,
+    ts=None,
+):
     ts = ts or NOW
     with db:
         db.execute(
@@ -32,6 +42,7 @@ def _insert_link(db, trace_id, from_id, to_id, link_start, link_end, snr=None, i
 
 
 # --- schema ---
+
 
 def test_init_db_idempotent(db):
     init_db(db)  # second call must not raise or duplicate tables
@@ -80,6 +91,7 @@ def test_init_db_migrates_old_uplink_table_to_new_schema():
 
 # --- upsert_node / get_node_attrs ---
 
+
 def test_upsert_node_insert(db):
     upsert_node(db, 0x12345678, long_name="Test Node", short_name="TN", role="ROUTER")
     attrs = get_node_attrs(db)
@@ -114,6 +126,7 @@ def test_get_node_attrs_unknown_node_from_links(db):
 
 # --- get_links_for_network ---
 
+
 def test_get_links_for_network_all(db):
     _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, snr=5.0)
     _insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, snr=3.0)
@@ -138,6 +151,7 @@ def test_get_links_for_network_end_range(db):
 
 
 # --- get_links_for_trace ---
+
 
 def test_get_links_for_trace(db):
     _insert_link(db, 42, 0x01, 0x02, 0x01, 0x02)
@@ -305,6 +319,7 @@ def test_get_uplinks_for_trace_includes_hop_fields(db):
 
 
 # --- get_links_for_node ---
+
 
 def test_get_links_for_node_as_start(db):
     _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02)

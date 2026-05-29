@@ -70,9 +70,15 @@ def load_config(path: str) -> Config:
     if "broker" not in mqtt_data:
         raise ConfigError("Missing required field: mqtt.broker")
 
-    mqtt = MQTTConfig(**{k: v for k, v in mqtt_data.items() if k in MQTTConfig.__dataclass_fields__})
-    api = APIConfig(**{k: v for k, v in data.get("api", {}).items() if k in APIConfig.__dataclass_fields__})
-    db = DBConfig(**{k: v for k, v in data.get("db", {}).items() if k in DBConfig.__dataclass_fields__})
+    mqtt = MQTTConfig(
+        **{k: v for k, v in mqtt_data.items() if k in MQTTConfig.__dataclass_fields__}
+    )
+    api = APIConfig(
+        **{k: v for k, v in data.get("api", {}).items() if k in APIConfig.__dataclass_fields__}
+    )
+    db = DBConfig(
+        **{k: v for k, v in data.get("db", {}).items() if k in DBConfig.__dataclass_fields__}
+    )
     observability = ObservabilityConfig(
         **{
             k: v

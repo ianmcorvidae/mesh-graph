@@ -1,6 +1,7 @@
 import sqlite3
-import pytest
+
 import networkx as nx
+import pytest
 
 from mesh_graph.db import init_db
 from mesh_graph.graph.builder import build_simple_network_graph

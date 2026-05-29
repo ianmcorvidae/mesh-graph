@@ -7,14 +7,13 @@ by calling the internal handler with fabricated ServiceEnvelope payloads.
 
 import base64
 import sqlite3
+
 import pytest
-
-from meshtastic.protobuf import mqtt_pb2, mesh_pb2, portnums_pb2, config_pb2
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from google.protobuf import json_format
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2, portnums_pb2
 
-from mesh_graph.db import init_db, get_links_for_trace, get_links_for_network
+from mesh_graph.db import get_links_for_network, get_links_for_trace, init_db
 from mesh_graph.ingestion.mqtt import MQTTDataSource
 
 DEFAULT_KEY = "1PG7OiApB1nwvP+rz05pAQ=="
@@ -153,6 +152,7 @@ def _make_encrypted_traceroute_se(
 # TRACEROUTE_APP
 # ---------------------------------------------------------------------------
 
+
 def test_traceroute_outbound_creates_db_rows(db, source):
     payload = _make_traceroute_se(route=[0xAAAA1111], snr_towards=[12, 8])
     source.handle_message(db, payload)
@@ -283,8 +283,8 @@ def test_traceroute_uplink_ignores_invalid_hop_values(db, source):
         "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
         (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
     ).fetchone()
-    assert row["hop_start"] is None   # invalid value stays None
-    assert row["hop_limit"] == 0      # invalid value coalesced to 0
+    assert row["hop_start"] is None  # invalid value stays None
+    assert row["hop_limit"] == 0  # invalid value coalesced to 0
 
 
 def test_traceroute_outbound_prev_node_is_origin_when_route_empty(db, source):
@@ -365,8 +365,11 @@ def test_traceroute_reply_prev_node_falls_back_when_route_back_empty(db, source)
 # NODEINFO_APP
 # ---------------------------------------------------------------------------
 
+
 def test_nodeinfo_upserts_node(db, source):
-    payload = _make_nodeinfo_se(nodenum=FROM_ID, long_name="Test Node", role=config_pb2.Config.DeviceConfig.ROUTER)
+    payload = _make_nodeinfo_se(
+        nodenum=FROM_ID, long_name="Test Node", role=config_pb2.Config.DeviceConfig.ROUTER
+    )
     source.handle_message(db, payload)
     row = db.execute("SELECT * FROM nodes WHERE nodenum = ?", (FROM_ID,)).fetchone()
     assert row is not None
@@ -387,6 +390,7 @@ def test_nodeinfo_updates_existing_node(db, source):
 # Decryption
 # ---------------------------------------------------------------------------
 
+
 def test_encrypted_packet_is_decrypted_and_stored(db, source):
     payload = _make_encrypted_traceroute_se()
     source.handle_message(db, payload)
@@ -397,6 +401,7 @@ def test_encrypted_packet_is_decrypted_and_stored(db, source):
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
+
 
 def test_malformed_payload_does_not_raise(db, source):
     source.handle_message(db, b"this is not a valid protobuf")

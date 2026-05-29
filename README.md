@@ -15,10 +15,29 @@ network topology graphs via an HTTP API.
 uv sync
 ```
 
-For development (includes pytest, httpx, etc.):
+For development (includes pytest, httpx, ruff, pre-commit, etc.):
 
 ```sh
 uv sync --extra dev
+```
+
+Install commit hooks:
+
+```sh
+uv run pre-commit install
+```
+
+Run the same lint/format **checks** used by pre-commit:
+
+```sh
+uv run pre-commit run --all-files
+```
+
+Apply lint/format fixes manually:
+
+```sh
+uv run ruff check --fix .
+uv run ruff format .
 ```
 
 ## Configuration

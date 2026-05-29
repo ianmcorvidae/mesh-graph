@@ -272,10 +272,7 @@ def _select_trace_candidate(
     to_id: Optional[int] = None,
     approx_ts: Optional[int] = None,
 ) -> Optional[sqlite3.Row]:
-    query = (
-        "SELECT trace_id, from_id, to_id FROM traceroute "
-        "WHERE trace_id = ?"
-    )
+    query = "SELECT trace_id, from_id, to_id FROM traceroute WHERE trace_id = ?"
     params: list = [trace_id]
     if from_id is not None:
         query += " AND from_id = ?"
@@ -284,7 +281,9 @@ def _select_trace_candidate(
         query += " AND to_id = ?"
         params.append(to_id)
     if approx_ts is not None:
-        query += " ORDER BY ABS(first_seen_ts - ?) ASC, first_seen_ts DESC, from_id DESC, to_id DESC"
+        query += (
+            " ORDER BY ABS(first_seen_ts - ?) ASC, first_seen_ts DESC, from_id DESC, to_id DESC"
+        )
         params.append(approx_ts)
     else:
         query += " ORDER BY first_seen_ts DESC, from_id DESC, to_id DESC"

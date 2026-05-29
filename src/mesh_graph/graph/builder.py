@@ -5,7 +5,12 @@ from typing import Optional
 
 import networkx as nx
 
-from mesh_graph.db import get_links_for_network, get_links_for_trace, get_node_attrs, get_uplinks_for_trace
+from mesh_graph.db import (
+    get_links_for_network,
+    get_links_for_trace,
+    get_node_attrs,
+    get_uplinks_for_trace,
+)
 from mesh_graph.observability import traced_span
 
 
@@ -27,9 +32,9 @@ def _snr_color(snr: Optional[float]) -> str:
     if snr is None:
         return "#888888"
 
-    red = (0xcc, 0x22, 0x00)
-    yellow = (0xcc, 0xcc, 0x00)
-    green = (0x00, 0xcc, 0x44)
+    red = (0xCC, 0x22, 0x00)
+    yellow = (0xCC, 0xCC, 0x00)
+    green = (0x00, 0xCC, 0x44)
 
     if snr <= -20:
         rgb = red
@@ -122,7 +127,9 @@ def _walk_single_outgoing_chain(
         visited.add(current)
 
 
-def _fallback_fast_back_reply_edges(rows: list[sqlite3.Row], destination_node: str) -> set[tuple[str, str]]:
+def _fallback_fast_back_reply_edges(
+    rows: list[sqlite3.Row], destination_node: str
+) -> set[tuple[str, str]]:
     outgoing: dict[str, list[tuple[str, str]]] = {}
     for row in rows:
         if not row["is_reply"]:
@@ -233,7 +240,9 @@ def build_simple_network_graph(
         for row in rows:
             start = row["link_start"]
             end = row["link_end"]
-            if not effective_include_unknown and (not isinstance(start, int) or not isinstance(end, int)):
+            if not effective_include_unknown and (
+                not isinstance(start, int) or not isinstance(end, int)
+            ):
                 continue
             filtered_rows.append(row)
 
@@ -321,7 +330,9 @@ def build_trace_graph(
             e0 = _node_str(row["link_start"])
             e1 = _node_str(row["link_end"])
         color = _snr_color(row["snr"])
-        edge_is_fast_path = row["is_fast_path"] if not row["is_reply"] else (e0, e1) in fast_back_edges
+        edge_is_fast_path = (
+            row["is_fast_path"] if not row["is_reply"] else (e0, e1) in fast_back_edges
+        )
         attrs = {
             "color": color,
             "fontcolor": color,
@@ -354,10 +365,13 @@ def build_trace_graph(
             uplink_attrs[node_name] = {"label": existing_label + "\n" + "\n".join(lines)}
         if uplink_attrs:
             nx.set_node_attributes(G, uplink_attrs)
-    nx.set_node_attributes(G, {
-        from_str: {"style": "filled", "fillcolor": "#ffa9a9"},
-        to_str: {"style": "filled", "fillcolor": "#a9a9ff"},
-    })
+    nx.set_node_attributes(
+        G,
+        {
+            from_str: {"style": "filled", "fillcolor": "#ffa9a9"},
+            to_str: {"style": "filled", "fillcolor": "#a9a9ff"},
+        },
+    )
     G.graph["rank_source_node"] = from_str
     G.graph["rank_sink_node"] = to_str
 
@@ -406,8 +420,12 @@ def build_node_graph(
 
     all_attrs = get_node_attrs(conn)
     if direction == "both":
-        out_depth = _build_depth_map(outgoing, incoming, node_id=node_id, depth=depth, traversal="outbound")
-        in_depth = _build_depth_map(outgoing, incoming, node_id=node_id, depth=depth, traversal="inbound")
+        out_depth = _build_depth_map(
+            outgoing, incoming, node_id=node_id, depth=depth, traversal="outbound"
+        )
+        in_depth = _build_depth_map(
+            outgoing, incoming, node_id=node_id, depth=depth, traversal="inbound"
+        )
         overlap = (set(out_depth.keys()) & set(in_depth.keys())) - {node_id}
 
         def map_out(val) -> str:
@@ -437,7 +455,9 @@ def build_node_graph(
             nx.set_node_attributes(G, extra_attrs)
     else:
         traversal = "both" if direction == "network" else direction
-        node_depth = _build_depth_map(outgoing, incoming, node_id=node_id, depth=depth, traversal=traversal)
+        node_depth = _build_depth_map(
+            outgoing, incoming, node_id=node_id, depth=depth, traversal=traversal
+        )
         mode = "both" if direction == "network" else direction
         _add_collapsed_edges(G, filter_rows_for(node_depth, mode), _node_str)
 
@@ -447,5 +467,7 @@ def build_node_graph(
     for target in target_nodes:
         if not G.has_node(target):
             G.add_node(target)
-    nx.set_node_attributes(G, {target: {"style": "filled", "fillcolor": "#ffffa9"} for target in target_nodes})
+    nx.set_node_attributes(
+        G, {target: {"style": "filled", "fillcolor": "#ffffa9"} for target in target_nodes}
+    )
     return G

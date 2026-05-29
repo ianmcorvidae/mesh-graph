@@ -3,14 +3,13 @@ from __future__ import annotations
 import base64
 import logging
 import sqlite3
-import threading
 from typing import Optional
 
 import paho.mqtt.client as mqtt
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from google.protobuf import json_format
-from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2, portnums_pb2
+from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2
 
 from mesh_graph.db import get_connection, record_trace_uplink, upsert_node
 from mesh_graph.ingestion.base import DataSource
@@ -152,7 +151,9 @@ class MQTTDataSource(DataSource):
         nodenum = getattr(mp, "from")
         role_val = user.role
         role_name = config_pb2.Config.DeviceConfig.Role.Name(role_val) if role_val else "CLIENT"
-        upsert_node(conn, nodenum, long_name=user.long_name, short_name=user.short_name, role=role_name)
+        upsert_node(
+            conn, nodenum, long_name=user.long_name, short_name=user.short_name, role=role_name
+        )
         logger.debug("Updated node info for !%08x (%s)", nodenum, user.long_name)
 
     def _handle_traceroute(
@@ -200,7 +201,9 @@ class MQTTDataSource(DataSource):
                 hop_limit=hop_limit,
             )
 
-        outbound_edges = self._build_outbound_edges(p, rd, trace_direction, is_mqtt, via, from_id, to_id)
+        outbound_edges = self._build_outbound_edges(
+            p, rd, trace_direction, is_mqtt, via, from_id, to_id
+        )
         logger.debug("OUTBOUND edges: %s", outbound_edges)
 
         with conn:
@@ -232,7 +235,10 @@ class MQTTDataSource(DataSource):
                     "VALUES (?,?,?,?,?,?,1,?) "
                     "ON CONFLICT(trace_id, from_id, to_id, link_start, link_end, is_reply) "
                     "DO UPDATE SET is_fast_path = MAX(traceroute_link.is_fast_path, excluded.is_fast_path)",
-                    [(trace_id, from_id, to_id, e[0], e[1], e[2], 1 if reply_fast_path else 0) for e in inbound_edges],
+                    [
+                        (trace_id, from_id, to_id, e[0], e[1], e[2], 1 if reply_fast_path else 0)
+                        for e in inbound_edges
+                    ],
                 )
 
     def _build_outbound_edges(self, p, rd, trace_direction, is_mqtt, via, from_id, to_id):
@@ -247,7 +253,9 @@ class MQTTDataSource(DataSource):
             if len(snr_towards) >= len(route) and snr_towards[idx] != UNK_SNR:
                 snr = snr_towards[idx] / 4
             if node_b == 4294967295:
-                node_b = self._unknown_hop_id(route, idx, from_id, p["from"] if trace_direction == "REPLY" else via)
+                node_b = self._unknown_hop_id(
+                    route, idx, from_id, p["from"] if trace_direction == "REPLY" else via
+                )
             edges.append((node_a, node_b, snr))
             node_a = node_b
 

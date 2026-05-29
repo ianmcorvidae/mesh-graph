@@ -24,9 +24,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "httpx>=0.27.0",
+    "pre-commit>=3.7.0",
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.14.0",
+    "ruff>=0.6.0",
 ]
 
 [project.scripts]
@@ -38,3 +40,11 @@ packages = ["src/mesh_graph"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
