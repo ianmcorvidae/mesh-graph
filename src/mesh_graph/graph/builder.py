@@ -63,6 +63,20 @@ def _snr_range_label(snrs: list[float]) -> str:
     return f"{lo}..{hi}dB"
 
 
+def _snr_weight(snr: Optional[float]) -> int:
+    if snr is None or snr <= -10:
+        return 1
+    if snr < -5:
+        return 2
+    if snr < 0:
+        return 3
+    if snr < 5:
+        return 4
+    if snr < 10:
+        return 5
+    return 6
+
+
 def _xor_link_color(link_start, link_end) -> str:
     if isinstance(link_start, int) and isinstance(link_end, int):
         return _edge_color(link_start ^ link_end)
@@ -338,12 +352,13 @@ def build_trace_graph(
             "fontcolor": color,
             "style": "dashed" if row["is_reply"] else "solid",
             "label": _snr_label(row["snr"]),
+            "weight": _snr_weight(row["snr"]),
         }
         if row["is_reply"]:
             attrs["dir"] = "back"
         if edge_is_fast_path:
             attrs["penwidth"] = 2
-            attrs["weight"] = 2
+            attrs["weight"] += 5
         G.add_edge(e0, e1, **attrs)
         from_id = row["from_id"]
         to_id = row["to_id"]

@@ -179,7 +179,7 @@ def test_trace_graph_fast_path_edge_style(db):
     edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
     assert edge["style"] == "solid"
     assert edge["penwidth"] == 2
-    assert edge["weight"] == 2
+    assert edge["weight"] == 6
 
 
 def test_trace_graph_reply_edge_style(db):
@@ -227,7 +227,7 @@ def test_trace_graph_marks_ingested_reply_fast_path_with_penwidth(db):
     assert len(reply_edges) == 2
     assert all(d.get("style") == "dashed" for d in reply_edges)
     assert all(d.get("penwidth") == 2 for d in reply_edges)
-    assert all(d.get("weight") == 2 for d in reply_edges)
+    assert all(d.get("weight") == 9 for d in reply_edges)
 
 
 def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
@@ -243,10 +243,31 @@ def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
     edge_da = G[f"!{node_d:08x}"][f"!{NODE_A:08x}"][0]
     edge_ae = G[f"!{NODE_A:08x}"][f"!{node_e:08x}"][0]
     assert edge_ab.get("penwidth") == 2
-    assert edge_ab.get("weight") == 2
+    assert edge_ab.get("weight") == 9
     assert edge_da.get("penwidth") == 2
-    assert edge_da.get("weight") == 2
+    assert edge_da.get("weight") == 9
     assert "penwidth" not in edge_ae
+
+
+def test_trace_graph_snr_weight_bins(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=-11.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_C, snr=-7.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_C, NODE_A, snr=-2.0)
+    node_d = 0xAAAA0004
+    node_e = 0xAAAA0005
+    node_f = 0xAAAA0006
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_d, snr=3.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_d, node_e, snr=7.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_e, node_f, snr=12.0)
+
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge_by_label = {d["label"]: d for _, _, d in G.edges(data=True)}
+    assert edge_by_label["-11.0dB"]["weight"] == 1
+    assert edge_by_label["-7.0dB"]["weight"] == 2
+    assert edge_by_label["-2.0dB"]["weight"] == 3
+    assert edge_by_label["3.0dB"]["weight"] == 4
+    assert edge_by_label["7.0dB"]["weight"] == 5
+    assert edge_by_label["12.0dB"]["weight"] == 6
 
 
 def test_trace_graph_does_not_mark_ambiguous_back_reply_path(db):
