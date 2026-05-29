@@ -103,6 +103,37 @@ def _uplink_label_lines(uplink_rows: list[sqlite3.Row]) -> dict[str, list[str]]:
     return result
 
 
+def _walk_single_outgoing_chain(
+    start: str,
+    outgoing: dict[str, list[tuple[str, str]]],
+) -> tuple[set[tuple[str, str]], str]:
+    marked: set[tuple[str, str]] = set()
+    current = start
+    visited = {start}
+    while True:
+        options = outgoing.get(current, [])
+        if len(options) != 1:
+            return marked, current
+        edge = options[0]
+        marked.add(edge)
+        current = edge[1]
+        if current in visited:
+            return marked, current
+        visited.add(current)
+
+
+def _fallback_fast_back_reply_edges(rows: list[sqlite3.Row], destination_node: str) -> set[tuple[str, str]]:
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for row in rows:
+        if not row["is_reply"]:
+            continue
+        # Reply links are rendered with inverted endpoints and dir=back.
+        edge = (_node_str(row["link_end"]), _node_str(row["link_start"]))
+        outgoing.setdefault(edge[0], []).append(edge)
+    marked, _ = _walk_single_outgoing_chain(destination_node, outgoing)
+    return marked
+
+
 def _build_depth_map(
     outgoing: dict[object, list[sqlite3.Row]],
     incoming: dict[object, list[sqlite3.Row]],
@@ -272,6 +303,14 @@ def build_trace_graph(
     G = nx.MultiDiGraph()
     from_id = None
     to_id = None
+    destination_node = _node_str(rows[0]["to_id"])
+    fast_back_edges = {
+        (_node_str(row["link_end"]), _node_str(row["link_start"]))
+        for row in rows
+        if row["is_reply"] and row["is_fast_path"]
+    }
+    if not fast_back_edges:
+        fast_back_edges = _fallback_fast_back_reply_edges(rows, destination_node)
 
     for row in rows:
         if row["is_reply"]:
@@ -281,16 +320,18 @@ def build_trace_graph(
             e0 = _node_str(row["link_start"])
             e1 = _node_str(row["link_end"])
         color = _snr_color(row["snr"])
+        edge_is_fast_path = row["is_fast_path"] if not row["is_reply"] else (e0, e1) in fast_back_edges
         attrs = {
             "color": color,
             "fontcolor": color,
-            "style": "bold" if row["is_fast_path"] else ("dashed" if row["is_reply"] else "solid"),
+            "style": "dashed" if row["is_reply"] else "solid",
             "label": _snr_label(row["snr"]),
         }
         if row["is_reply"]:
             attrs["dir"] = "back"
-        if row["is_fast_path"]:
-            attrs["weight"] = 2  # Keep the fast path visually stronger.
+        if edge_is_fast_path:
+            attrs["penwidth"] = 2
+            attrs["weight"] = 2
         G.add_edge(e0, e1, **attrs)
         from_id = row["from_id"]
         to_id = row["to_id"]

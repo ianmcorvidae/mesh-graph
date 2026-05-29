@@ -224,12 +224,15 @@ class MQTTDataSource(DataSource):
         if trace_direction == "REPLY":
             inbound_edges = self._build_inbound_edges(p, rd, is_mqtt, via, to_id)
             logger.debug("INBOUND edges: %s", inbound_edges)
+            reply_fast_path = bool(is_mqtt and via == from_id)
             with conn:
                 conn.executemany(
-                    "INSERT OR IGNORE INTO traceroute_link "
-                    "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply) "
-                    "VALUES (?,?,?,?,?,?,1)",
-                    [(trace_id, from_id, to_id, e[0], e[1], e[2]) for e in inbound_edges],
+                    "INSERT INTO traceroute_link "
+                    "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply, is_fast_path) "
+                    "VALUES (?,?,?,?,?,?,1,?) "
+                    "ON CONFLICT(trace_id, from_id, to_id, link_start, link_end, is_reply) "
+                    "DO UPDATE SET is_fast_path = MAX(traceroute_link.is_fast_path, excluded.is_fast_path)",
+                    [(trace_id, from_id, to_id, e[0], e[1], e[2], 1 if reply_fast_path else 0) for e in inbound_edges],
                 )
 
     def _build_outbound_edges(self, p, rd, trace_direction, is_mqtt, via, from_id, to_id):

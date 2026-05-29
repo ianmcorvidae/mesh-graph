@@ -160,8 +160,10 @@ def test_trace_graph_returns_none_for_unknown_trace(db):
 def test_trace_graph_fast_path_edge_style(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, is_fast_path=1)
     G = build_trace_graph(db, trace_id=TRACE_1)
-    edge_data = list(G.edges(data=True))
-    assert any(d.get("style") == "bold" for _, _, d in edge_data)
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
+    assert edge["style"] == "solid"
+    assert edge["penwidth"] == 2
+    assert edge["weight"] == 2
 
 
 def test_trace_graph_reply_edge_style(db):
@@ -199,6 +201,44 @@ def test_trace_graph_uses_snr_gradient_colors(db):
     assert edge_by_label["10.0dB"]["color"] == "#00cc44"
     assert edge_by_label["?dB"]["color"] == "#888888"
     assert edge_by_label["0.0dB"]["fontcolor"] == "#cccc00"
+
+
+def test_trace_graph_marks_ingested_reply_fast_path_with_penwidth(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=1.0, is_reply=1, is_fast_path=1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_C, NODE_B, snr=2.0, is_reply=1, is_fast_path=1)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    reply_edges = [d for _, _, d in G.edges(data=True) if d.get("dir") == "back"]
+    assert len(reply_edges) == 2
+    assert all(d.get("style") == "dashed" for d in reply_edges)
+    assert all(d.get("penwidth") == 2 for d in reply_edges)
+    assert all(d.get("weight") == 2 for d in reply_edges)
+
+
+def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
+    node_d = 0xAAAA0004
+    node_e = 0xAAAA0005
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=1.0, is_reply=1)  # B->A
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_d, NODE_A, snr=2.0, is_reply=1)  # A->D
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_e, snr=3.0, is_reply=1)  # E->A (incoming to A only)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge_bd = G[f"!{NODE_B:08x}"][f"!{NODE_A:08x}"][0]
+    edge_ad = G[f"!{NODE_A:08x}"][f"!{node_d:08x}"][0]
+    edge_ea = G[f"!{node_e:08x}"][f"!{NODE_A:08x}"][0]
+    assert edge_bd.get("penwidth") == 2
+    assert edge_bd.get("weight") == 2
+    assert edge_ad.get("penwidth") == 2
+    assert edge_ad.get("weight") == 2
+    assert "penwidth" not in edge_ea
+
+
+def test_trace_graph_does_not_mark_ambiguous_back_reply_path(db):
+    node_d = 0xAAAA0004
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=1.0, is_reply=1)  # B->A
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_d, NODE_B, snr=2.0, is_reply=1)  # B->D
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    reply_edges = [d for _, _, d in G.edges(data=True) if d.get("style") == "dashed"]
+    assert len(reply_edges) == 2
+    assert all("penwidth" not in d for d in reply_edges)
 
 
 def test_trace_graph_highlights_from_to_nodes(db):

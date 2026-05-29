@@ -180,6 +180,42 @@ def test_traceroute_reply_stores_return_links(db, source):
     assert len(reply_rows) > 0
 
 
+def test_traceroute_reply_uplinked_by_origin_marks_route_back_fast_path(db, source):
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=FROM_ID,
+        route_back=[0xAAAA2222],
+        snr_back=[6],
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+    rows = get_links_for_trace(db, trace_id=TRACE_ID, from_id=FROM_ID, to_id=TO_ID)
+    reply_rows = [r for r in rows if r["is_reply"] == 1]
+    assert len(reply_rows) == 2
+    assert all(r["is_fast_path"] == 1 for r in reply_rows)
+
+
+def test_traceroute_reply_non_origin_uplink_does_not_mark_route_back_fast_path(db, source):
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=GATEWAY_ID,
+        route_back=[0xAAAA2222],
+        snr_back=[6],
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+    rows = get_links_for_trace(db, trace_id=TRACE_ID, from_id=FROM_ID, to_id=TO_ID)
+    reply_rows = [r for r in rows if r["is_reply"] == 1]
+    assert len(reply_rows) == 2
+    assert all(r["is_fast_path"] == 0 for r in reply_rows)
+
+
 def test_traceroute_inserts_traceroute_record(db, source):
     payload = _make_traceroute_se()
     source.handle_message(db, payload)
