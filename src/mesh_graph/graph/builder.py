@@ -358,7 +358,7 @@ def build_trace_graph(
             attrs["dir"] = "back"
         if edge_is_fast_path:
             attrs["penwidth"] = 2
-            attrs["weight"] += 5
+            attrs["weight"] = 20
         G.add_edge(e0, e1, **attrs)
         from_id = row["from_id"]
         to_id = row["to_id"]

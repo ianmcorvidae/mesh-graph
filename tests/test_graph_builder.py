@@ -179,7 +179,7 @@ def test_trace_graph_fast_path_edge_style(db):
     edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
     assert edge["style"] == "solid"
     assert edge["penwidth"] == 2
-    assert edge["weight"] == 6
+    assert edge["weight"] == 20
 
 
 def test_trace_graph_reply_edge_style(db):
@@ -227,7 +227,7 @@ def test_trace_graph_marks_ingested_reply_fast_path_with_penwidth(db):
     assert len(reply_edges) == 2
     assert all(d.get("style") == "dashed" for d in reply_edges)
     assert all(d.get("penwidth") == 2 for d in reply_edges)
-    assert all(d.get("weight") == 9 for d in reply_edges)
+    assert all(d.get("weight") == 20 for d in reply_edges)
 
 
 def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
@@ -243,9 +243,9 @@ def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
     edge_da = G[f"!{node_d:08x}"][f"!{NODE_A:08x}"][0]
     edge_ae = G[f"!{NODE_A:08x}"][f"!{node_e:08x}"][0]
     assert edge_ab.get("penwidth") == 2
-    assert edge_ab.get("weight") == 9
+    assert edge_ab.get("weight") == 20
     assert edge_da.get("penwidth") == 2
-    assert edge_da.get("weight") == 9
+    assert edge_da.get("weight") == 20
     assert "penwidth" not in edge_ae
 
 
