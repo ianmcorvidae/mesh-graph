@@ -23,6 +23,27 @@ def _edge_color(trace_id) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _snr_color(snr: Optional[float]) -> str:
+    if snr is None:
+        return "#888888"
+
+    red = (0xcc, 0x22, 0x00)
+    yellow = (0xcc, 0xcc, 0x00)
+    green = (0x00, 0xcc, 0x44)
+
+    if snr <= -20:
+        rgb = red
+    elif snr < 0:
+        t = (snr + 20.0) / 20.0
+        rgb = tuple(round(a + (b - a) * t) for a, b in zip(red, yellow, strict=True))
+    elif snr < 10:
+        t = snr / 10.0
+        rgb = tuple(round(a + (b - a) * t) for a, b in zip(yellow, green, strict=True))
+    else:
+        rgb = green
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
 def _snr_label(snr) -> str:
     return f"{'?' if snr is None else snr}dB"
 
@@ -251,64 +272,28 @@ def build_trace_graph(
     G = nx.MultiDiGraph()
     from_id = None
     to_id = None
-    edge_map: dict[tuple[str, str], dict[str, object]] = {}
 
     for row in rows:
-        color = _edge_color(row["trace_id"])
-        snr_label = _snr_label(row["snr"])
         if row["is_reply"]:
             e0 = _node_str(row["link_end"])
             e1 = _node_str(row["link_start"])
-            rec = edge_map.setdefault(
-                (e0, e1),
-                {
-                    "color": color,
-                    "fontcolor": color,
-                    "out_label": None,
-                    "out_style": "solid",
-                    "back_label": None,
-                },
-            )
-            rec["back_label"] = snr_label
         else:
             e0 = _node_str(row["link_start"])
             e1 = _node_str(row["link_end"])
-            rec = edge_map.setdefault(
-                (e0, e1),
-                {
-                    "color": color,
-                    "fontcolor": color,
-                    "out_label": None,
-                    "out_style": "solid",
-                    "back_label": None,
-                },
-            )
-            rec["out_label"] = snr_label
-            rec["out_style"] = "bold" if row["is_fast_path"] else "solid"
+        color = _snr_color(row["snr"])
+        attrs = {
+            "color": color,
+            "fontcolor": color,
+            "style": "bold" if row["is_fast_path"] else ("dashed" if row["is_reply"] else "solid"),
+            "label": _snr_label(row["snr"]),
+        }
+        if row["is_reply"]:
+            attrs["dir"] = "back"
+        if row["is_fast_path"]:
+            attrs["weight"] = 2  # Keep the fast path visually stronger.
+        G.add_edge(e0, e1, **attrs)
         from_id = row["from_id"]
         to_id = row["to_id"]
-
-    for (e0, e1), rec in edge_map.items():
-        out_label = rec["out_label"]
-        back_label = rec["back_label"]
-        attrs = {
-            "color": rec["color"],
-            "fontcolor": rec["fontcolor"],
-        }
-        if out_label is not None and back_label is not None:
-            attrs["style"] = rec["out_style"]
-            attrs["dir"] = "both"
-            attrs["label"] = f"{out_label}\n{back_label}"
-        elif out_label is not None:
-            attrs["style"] = rec["out_style"]
-            attrs["label"] = out_label
-        else:
-            attrs["style"] = "dashed"
-            attrs["dir"] = "back"
-            attrs["label"] = back_label
-        if rec["out_style"] == "bold":
-            attrs["weight"] = 2 # this is the fast-path route
-        G.add_edge(e0, e1, **attrs)
 
     from_str = _node_str(from_id)
     to_str = _node_str(to_id)

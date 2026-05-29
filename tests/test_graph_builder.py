@@ -170,17 +170,35 @@ def test_trace_graph_reply_edge_style(db):
     edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
     assert edge["style"] == "dashed"
     assert edge["dir"] == "back"
+    assert edge["label"] == "?dB"
+    assert edge["color"] == "#888888"
 
 
-def test_trace_graph_combines_outbound_and_reply_edge(db):
+def test_trace_graph_keeps_outbound_and_reply_edges_separate(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=4.0)
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=7.0, is_reply=1)
     G = build_trace_graph(db, trace_id=TRACE_1)
-    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
-    assert edge["dir"] == "both"
-    assert edge["style"] == "solid"
-    assert edge["label"] == "4.0dB\n7.0dB"
-    assert G.number_of_edges() == 1
+    outbound = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
+    reply = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][1]
+    assert outbound["style"] == "solid"
+    assert outbound["label"] == "4.0dB"
+    assert reply["style"] == "dashed"
+    assert reply["label"] == "7.0dB"
+    assert G.number_of_edges() == 2
+
+
+def test_trace_graph_uses_snr_gradient_colors(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=-20.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_C, snr=0.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_C, NODE_A, snr=10.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_C, snr=None)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge_by_label = {d["label"]: d for _, _, d in G.edges(data=True)}
+    assert edge_by_label["-20.0dB"]["color"] == "#cc2200"
+    assert edge_by_label["0.0dB"]["color"] == "#cccc00"
+    assert edge_by_label["10.0dB"]["color"] == "#00cc44"
+    assert edge_by_label["?dB"]["color"] == "#888888"
+    assert edge_by_label["0.0dB"]["fontcolor"] == "#cccc00"
 
 
 def test_trace_graph_highlights_from_to_nodes(db):
