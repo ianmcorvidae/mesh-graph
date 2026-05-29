@@ -45,6 +45,7 @@ def _insert(
     ts=None,
     first_seen_ts=None,
     snr=5.0,
+    is_reply=0,
 ):
     link_start = link_start if link_start is not None else from_id
     link_end = link_end if link_end is not None else to_id
@@ -59,7 +60,7 @@ def _insert(
             "INSERT OR IGNORE INTO traceroute_link "
             "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
-            (trace_id, from_id, to_id, ts, link_start, link_end, snr, 0, 0),
+            (trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, 0),
         )
 
 
@@ -321,6 +322,66 @@ def test_trace_graph_invalid_from_node_returns_422(client, db):
 def test_trace_graph_invalid_date_returns_422(client, db):
     _insert(db)
     resp = client.get(f"/graph/trace/{TRACE_1}?date=not-a-date")
+    assert resp.status_code == 422
+
+
+def test_trace_graph_direction_out_shows_only_outbound_edges(client, db):
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=4.0,
+        is_reply=0,
+    )
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_B,
+        link_end=NODE_A,
+        snr=7.0,
+        is_reply=1,
+    )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&direction=out")
+    assert resp.status_code == 200
+    assert b"4.0dB" in resp.content
+    assert b"7.0dB" not in resp.content
+
+
+def test_trace_graph_direction_in_shows_only_reply_edges(client, db):
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=4.0,
+        is_reply=0,
+    )
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_B,
+        link_end=NODE_A,
+        snr=7.0,
+        is_reply=1,
+    )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&direction=in")
+    assert resp.status_code == 200
+    assert b"7.0dB" in resp.content
+    assert b"4.0dB" not in resp.content
+
+
+def test_trace_graph_invalid_direction_returns_422(client, db):
+    _insert(db)
+    resp = client.get(f"/graph/trace/{TRACE_1}?direction=sideways")
     assert resp.status_code == 422
 
 

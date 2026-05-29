@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Optional
+from typing import Literal, Optional
 
 import networkx as nx
 
@@ -306,6 +306,7 @@ def build_trace_graph(
     from_id: Optional[int] = None,
     to_id: Optional[int] = None,
     approx_ts: Optional[int] = None,
+    direction: Literal["both", "out", "in"] = "both",
 ):
     rows = get_links_for_trace(
         conn,
@@ -325,8 +326,8 @@ def build_trace_graph(
     )
 
     G = nx.MultiDiGraph()
-    from_id = None
-    to_id = None
+    trace_from_id = rows[0]["from_id"]
+    trace_to_id = rows[0]["to_id"]
     destination_node = _node_str(rows[0]["to_id"])
     fast_back_edges = {
         (_node_str(row["link_end"]), _node_str(row["link_start"]))
@@ -337,6 +338,10 @@ def build_trace_graph(
         fast_back_edges = _fallback_fast_back_reply_edges(rows, destination_node)
 
     for row in rows:
+        if direction == "out" and row["is_reply"]:
+            continue
+        if direction == "in" and not row["is_reply"]:
+            continue
         if row["is_reply"]:
             e0 = _node_str(row["link_end"])
             e1 = _node_str(row["link_start"])
@@ -360,11 +365,8 @@ def build_trace_graph(
             attrs["penwidth"] = 2
             attrs["weight"] = 20
         G.add_edge(e0, e1, **attrs)
-        from_id = row["from_id"]
-        to_id = row["to_id"]
-
-    from_str = _node_str(from_id)
-    to_str = _node_str(to_id)
+    from_str = _node_str(trace_from_id)
+    to_str = _node_str(trace_to_id)
     for n in (from_str, to_str):
         if not G.has_node(n):
             G.add_node(n)

@@ -111,9 +111,12 @@ def create_app(
         from_node: Optional[str] = Query(default=None, alias="from"),
         to_node: Optional[str] = Query(default=None, alias="to"),
         date: Optional[str] = Query(default=None),
+        direction: Literal["both", "out", "in"] = Query(default="both"),
     ):
         with traced_span(
-            "api.graph.trace", warn_ms=5000, attributes={"format": format, "trace_id": trace_id}
+            "api.graph.trace",
+            warn_ms=5000,
+            attributes={"format": format, "trace_id": trace_id, "direction": direction},
         ):
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
@@ -137,6 +140,7 @@ def create_app(
                     from_id=from_id,
                     to_id=to_id,
                     approx_ts=approx_ts,
+                    direction=direction,
                 )
                 if G is not None:
                     span.set_attribute("graph.node_count", len(G.nodes))

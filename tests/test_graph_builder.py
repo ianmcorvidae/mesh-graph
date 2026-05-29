@@ -205,6 +205,23 @@ def test_trace_graph_keeps_outbound_and_reply_edges_separate(db):
     assert G.number_of_edges() == 2
 
 
+def test_trace_graph_direction_filters_edges_by_is_reply(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=4.0, is_reply=0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=7.0, is_reply=1)
+
+    both = build_trace_graph(db, trace_id=TRACE_1, direction="both")
+    out = build_trace_graph(db, trace_id=TRACE_1, direction="out")
+    incoming = build_trace_graph(db, trace_id=TRACE_1, direction="in")
+
+    assert both.number_of_edges() == 2
+    assert out.number_of_edges() == 1
+    assert incoming.number_of_edges() == 1
+    out_edge = next(iter(out.edges(data=True)))[2]
+    in_edge = next(iter(incoming.edges(data=True)))[2]
+    assert out_edge["style"] == "solid"
+    assert in_edge["style"] == "dashed"
+
+
 def test_trace_graph_uses_snr_gradient_colors(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=-20.0)
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_C, snr=0.0)

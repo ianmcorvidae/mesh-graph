@@ -180,12 +180,13 @@ When `include_clients=false`, `/graph/network` keeps only ROUTER/ROUTER_LATE/CLI
 `/graph/trace/{trace_id}` also accepts optional selectors when `trace_id` is not unique:
 
 ```
-?from=!aabbccdd&to=!eeff0011&date=2024-01-01T00:00:00Z
+?from=!aabbccdd&to=!eeff0011&date=2024-01-01T00:00:00Z&direction=both
 ```
 
 - `from`: expected origin node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
 - `to`: expected destination node (same formats)
 - `date`: approximate traceroute timestamp (ISO 8601); the closest match is selected
+- `direction`: `both` (default), `out` (non-reply links only), or `in` (reply links only)
 
 When available, each node in the trace graph that matches an uplink gets an extra label line like:
 
