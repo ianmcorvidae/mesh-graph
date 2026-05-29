@@ -217,18 +217,18 @@ def test_trace_graph_marks_ingested_reply_fast_path_with_penwidth(db):
 def test_trace_graph_fallback_marks_unique_chain_from_destination(db):
     node_d = 0xAAAA0004
     node_e = 0xAAAA0005
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=1.0, is_reply=1)  # B->A
-    _insert(db, TRACE_1, NODE_A, NODE_B, node_d, NODE_A, snr=2.0, is_reply=1)  # A->D
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_e, snr=3.0, is_reply=1)  # E->A (incoming to A only)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_A, snr=1.0, is_reply=1)  # B->A
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_d, snr=2.0, is_reply=1)  # A->D
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_e, NODE_A, snr=3.0, is_reply=1)  # E->A (incoming to A only)
     G = build_trace_graph(db, trace_id=TRACE_1)
-    edge_bd = G[f"!{NODE_B:08x}"][f"!{NODE_A:08x}"][0]
-    edge_ad = G[f"!{NODE_A:08x}"][f"!{node_d:08x}"][0]
-    edge_ea = G[f"!{node_e:08x}"][f"!{NODE_A:08x}"][0]
-    assert edge_bd.get("penwidth") == 2
-    assert edge_bd.get("weight") == 2
-    assert edge_ad.get("penwidth") == 2
-    assert edge_ad.get("weight") == 2
-    assert "penwidth" not in edge_ea
+    edge_ab = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"][0]
+    edge_da = G[f"!{node_d:08x}"][f"!{NODE_A:08x}"][0]
+    edge_ae = G[f"!{NODE_A:08x}"][f"!{node_e:08x}"][0]
+    assert edge_ab.get("penwidth") == 2
+    assert edge_ab.get("weight") == 2
+    assert edge_da.get("penwidth") == 2
+    assert edge_da.get("weight") == 2
+    assert "penwidth" not in edge_ae
 
 
 def test_trace_graph_does_not_mark_ambiguous_back_reply_path(db):

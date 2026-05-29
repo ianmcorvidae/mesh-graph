@@ -127,11 +127,12 @@ def _fallback_fast_back_reply_edges(rows: list[sqlite3.Row], destination_node: s
     for row in rows:
         if not row["is_reply"]:
             continue
-        # Reply links are rendered with inverted endpoints and dir=back.
-        edge = (_node_str(row["link_end"]), _node_str(row["link_start"]))
+        # Fallback traces stored reply links from the trace destination outward.
+        edge = (_node_str(row["link_start"]), _node_str(row["link_end"]))
         outgoing.setdefault(edge[0], []).append(edge)
-    marked, _ = _walk_single_outgoing_chain(destination_node, outgoing)
-    return marked
+    marked_stored, _ = _walk_single_outgoing_chain(destination_node, outgoing)
+    # Reply links are rendered with inverted endpoints and dir=back.
+    return {(end, start) for start, end in marked_stored}
 
 
 def _build_depth_map(
