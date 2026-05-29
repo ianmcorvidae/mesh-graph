@@ -104,6 +104,28 @@ uv run mesh-graph --config config.toml --mode api
 - `--mode ingestion`: MQTT data collection only (writes to DB)
 - `--mode api`: HTTP API server only (reads from DB)
 
+## Container image
+
+This repository publishes a container image to GHCR on pushes to `main`:
+
+```sh
+ghcr.io/ianmcorvidae/mesh-graph:latest
+```
+
+The image uses `mesh-graph` as the entrypoint, so you can pass `--config` and
+`--mode` directly:
+
+```sh
+docker run --rm \
+  -v meshgraph-data:/data \
+  ghcr.io/ianmcorvidae/mesh-graph:latest \
+  --config /config.toml \
+  --mode api
+```
+
+For SQLite data, mount `/data` and point `db.path` at something like
+`/data/trace-graph.db` in your config.
+
 ## API
 
 All graph endpoints accept `?format=svg` (default) or `?format=png`.
