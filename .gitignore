@@ -9,7 +9,7 @@ venv/
 env/
 
 # Local runtime/config artifacts
-config.toml
+config*.toml
 *.db
 *.db-shm
 *.db-wal
