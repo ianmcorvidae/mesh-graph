@@ -49,6 +49,8 @@ def test_init_db_idempotent(db):
     rows = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     names = {r["name"] for r in rows}
     assert {"traceroute", "traceroute_link", "nodes", "traceroute_uplink"}.issubset(names)
+    cols = db.execute("PRAGMA table_info(traceroute_link)").fetchall()
+    assert "route_len" in {c["name"] for c in cols}
 
 
 def test_init_db_migrates_old_uplink_table_to_new_schema():

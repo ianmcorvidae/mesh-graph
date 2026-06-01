@@ -41,6 +41,7 @@ def init_db(conn: sqlite3.Connection) -> None:
                 PRIMARY KEY (trace_id, from_id, to_id, link_start, link_end, is_reply)
             )
         """)
+        _ensure_column(conn, "traceroute_link", "route_len", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS traceroute_link_ts ON traceroute_link(ts)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS nodes (

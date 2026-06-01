@@ -361,6 +361,48 @@ def test_traceroute_reply_prev_node_falls_back_when_route_back_empty(db, source)
     assert rows[0]["prev_node"] == TO_ID  # destination of traceroute
 
 
+def test_traceroute_outbound_stores_route_len_only_on_terminal_link(db, source):
+    payload = _make_traceroute_se(route=[0xAAAA1111, 0xAAAA2222], gateway_id=GATEWAY_ID)
+    source.handle_message(db, payload)
+
+    rows = db.execute(
+        "SELECT link_start, link_end, route_len FROM traceroute_link "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 0",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchall()
+    assert len(rows) == 3
+    terminal = [r for r in rows if r["route_len"] is not None]
+    non_terminal = [r for r in rows if r["route_len"] is None]
+    assert len(terminal) == 1
+    assert terminal[0]["route_len"] == 2
+    assert len(non_terminal) == 2
+
+
+def test_traceroute_reply_stores_route_back_len_only_on_terminal_link(db, source):
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=GATEWAY_ID,
+        route_back=[0xAAAA2222, 0xAAAA3333],
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+
+    rows = db.execute(
+        "SELECT link_start, link_end, route_len FROM traceroute_link "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 1",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchall()
+    assert len(rows) == 3
+    terminal = [r for r in rows if r["route_len"] is not None]
+    non_terminal = [r for r in rows if r["route_len"] is None]
+    assert len(terminal) == 1
+    assert terminal[0]["route_len"] == 2
+    assert len(non_terminal) == 2
+
+
 # ---------------------------------------------------------------------------
 # NODEINFO_APP
 # ---------------------------------------------------------------------------

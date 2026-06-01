@@ -210,18 +210,18 @@ class MQTTDataSource(DataSource):
             if trace_direction == "REPLY":
                 query = (
                     "INSERT OR REPLACE INTO traceroute_link "
-                    "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply, is_fast_path) "
-                    "VALUES (?,?,?,?,?,?,0,1)"
+                    "(trace_id, from_id, to_id, link_start, link_end, snr, route_len, is_reply, is_fast_path) "
+                    "VALUES (?,?,?,?,?,?,?,0,1)"
                 )
             else:
                 query = (
                     "INSERT OR IGNORE INTO traceroute_link "
-                    "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply, is_fast_path) "
-                    "VALUES (?,?,?,?,?,?,0,0)"
+                    "(trace_id, from_id, to_id, link_start, link_end, snr, route_len, is_reply, is_fast_path) "
+                    "VALUES (?,?,?,?,?,?,?,0,0)"
                 )
             conn.executemany(
                 query,
-                [(trace_id, from_id, to_id, e[0], e[1], e[2]) for e in outbound_edges],
+                [(trace_id, from_id, to_id, e[0], e[1], e[2], e[3]) for e in outbound_edges],
             )
 
         if trace_direction == "REPLY":
@@ -231,12 +231,21 @@ class MQTTDataSource(DataSource):
             with conn:
                 conn.executemany(
                     "INSERT INTO traceroute_link "
-                    "(trace_id, from_id, to_id, link_start, link_end, snr, is_reply, is_fast_path) "
-                    "VALUES (?,?,?,?,?,?,1,?) "
+                    "(trace_id, from_id, to_id, link_start, link_end, snr, route_len, is_reply, is_fast_path) "
+                    "VALUES (?,?,?,?,?,?,?,1,?) "
                     "ON CONFLICT(trace_id, from_id, to_id, link_start, link_end, is_reply) "
                     "DO UPDATE SET is_fast_path = MAX(traceroute_link.is_fast_path, excluded.is_fast_path)",
                     [
-                        (trace_id, from_id, to_id, e[0], e[1], e[2], 1 if reply_fast_path else 0)
+                        (
+                            trace_id,
+                            from_id,
+                            to_id,
+                            e[0],
+                            e[1],
+                            e[2],
+                            e[3],
+                            1 if reply_fast_path else 0,
+                        )
                         for e in inbound_edges
                     ],
                 )
@@ -245,6 +254,7 @@ class MQTTDataSource(DataSource):
         edges = []
         node_a = p["to"] if trace_direction == "REPLY" else p["from"]
         route = rd.get("route", [])
+        route_len = len(route)
         snr_towards = rd.get("snrTowards", [])
 
         for idx, node_num in enumerate(route):
@@ -256,7 +266,7 @@ class MQTTDataSource(DataSource):
                 node_b = self._unknown_hop_id(
                     route, idx, from_id, p["from"] if trace_direction == "REPLY" else via
                 )
-            edges.append((node_a, node_b, snr))
+            edges.append((node_a, node_b, snr, None))
             node_a = node_b
 
         if trace_direction == "REPLY":
@@ -272,7 +282,7 @@ class MQTTDataSource(DataSource):
                 snr = snr_towards[-1] / 4
             elif p.get("rxSnr") is not None and p["rxSnr"] != UNK_SNR:
                 snr = p["rxSnr"]
-            edges.append((node_a, node_b, snr))
+            edges.append((node_a, node_b, snr, route_len))
 
         return edges
 
@@ -280,6 +290,7 @@ class MQTTDataSource(DataSource):
         edges = []
         node_a = p["from"]
         route_back = rd.get("routeBack", [])
+        route_back_len = len(route_back)
         snr_back = rd.get("snrBack", [])
 
         for idx, node_num in enumerate(route_back):
@@ -289,7 +300,7 @@ class MQTTDataSource(DataSource):
                 snr = snr_back[idx] / 4
             if node_b == 4294967295:
                 node_b = self._unknown_hop_id(route_back, idx, to_id, p["to"])
-            edges.append((node_a, node_b, snr))
+            edges.append((node_a, node_b, snr, None))
             node_a = node_b
 
         node_b = via if is_mqtt else p["to"]
@@ -299,7 +310,7 @@ class MQTTDataSource(DataSource):
                 snr = snr_back[-1] / 4
             elif p.get("rxSnr") is not None and p["rxSnr"] != UNK_SNR:
                 snr = p["rxSnr"]
-            edges.append((node_a, node_b, snr))
+            edges.append((node_a, node_b, snr, route_back_len))
 
         return edges
 
