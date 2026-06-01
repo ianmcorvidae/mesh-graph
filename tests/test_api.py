@@ -274,6 +274,19 @@ def test_trace_graph_404_for_unknown(client, db):
     assert resp.status_code == 404
 
 
+def test_trace_graph_renders_sparse_graph_when_trace_has_no_links(client, db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NOW),
+        )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    assert resp.status_code == 200
+    assert b"<svg" in resp.content
+    assert b"!aaaa0001" in resp.content
+    assert b"!aaaa0002" in resp.content
+
+
 def test_trace_graph_defaults_to_most_recent_when_multiple_candidates(client, db):
     trace_id = 2001
     _insert(

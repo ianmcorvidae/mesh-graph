@@ -173,6 +173,18 @@ def test_trace_graph_returns_none_for_unknown_trace(db):
     assert G is None
 
 
+def test_trace_graph_returns_sparse_graph_when_trace_has_no_links(db):
+    with db:
+        db.execute(
+            "INSERT INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NOW),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    assert G is not None
+    assert G.number_of_edges() == 0
+    assert set(G.nodes()) == {f"!{NODE_A:08x}", f"!{NODE_B:08x}"}
+
+
 def test_trace_graph_fast_path_edge_style(db):
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, is_fast_path=1)
     G = build_trace_graph(db, trace_id=TRACE_1)

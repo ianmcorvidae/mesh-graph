@@ -9,6 +9,7 @@ from mesh_graph.db import (
     get_links_for_network,
     get_links_for_trace,
     get_node_attrs,
+    get_trace_for_selector,
     get_uplinks_for_trace,
 )
 from mesh_graph.observability import traced_span
@@ -308,6 +309,16 @@ def build_trace_graph(
     approx_ts: Optional[int] = None,
     direction: Literal["both", "out", "in"] = "both",
 ):
+    trace = get_trace_for_selector(
+        conn,
+        trace_id=trace_id,
+        from_id=from_id,
+        to_id=to_id,
+        approx_ts=approx_ts,
+    )
+    if trace is None:
+        return None
+
     rows = get_links_for_trace(
         conn,
         trace_id=trace_id,
@@ -315,8 +326,6 @@ def build_trace_graph(
         to_id=to_id,
         approx_ts=approx_ts,
     )
-    if not rows:
-        return None
     uplink_rows = get_uplinks_for_trace(
         conn,
         trace_id=trace_id,
@@ -326,9 +335,9 @@ def build_trace_graph(
     )
 
     G = nx.MultiDiGraph()
-    trace_from_id = rows[0]["from_id"]
-    trace_to_id = rows[0]["to_id"]
-    destination_node = _node_str(rows[0]["to_id"])
+    trace_from_id = trace["from_id"]
+    trace_to_id = trace["to_id"]
+    destination_node = _node_str(trace_to_id)
     fast_back_edges = {
         (_node_str(row["link_end"]), _node_str(row["link_start"]))
         for row in rows

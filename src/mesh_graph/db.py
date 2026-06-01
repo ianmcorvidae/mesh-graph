@@ -241,6 +241,22 @@ def get_links_for_trace(
     ).fetchall()
 
 
+def get_trace_for_selector(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+    approx_ts: Optional[int] = None,
+) -> Optional[sqlite3.Row]:
+    return _select_trace_candidate(
+        conn,
+        trace_id=trace_id,
+        from_id=from_id,
+        to_id=to_id,
+        approx_ts=approx_ts,
+    )
+
+
 def get_uplinks_for_trace(
     conn: sqlite3.Connection,
     trace_id: int,
