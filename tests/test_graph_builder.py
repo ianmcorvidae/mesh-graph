@@ -371,7 +371,7 @@ def test_trace_graph_uplink_edge_label_reply_only(db):
         db.execute(
             "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
             "VALUES (?,?,?,?,?,?,?)",
-            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 1, NODE_B),
+            (TRACE_1, NODE_A, NODE_B, NODE_B, NOW, 1, uplink_1),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
     label = G[f"!{NODE_B:08x}"][f"!{uplink_1:08x}"][0]["label"]
@@ -409,13 +409,34 @@ def test_trace_graph_uplink_edge_label_both_directions(db):
             "INSERT INTO traceroute_uplink "
             "(trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_limit) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW + 2, 1, NODE_B, 3),
+            (TRACE_1, NODE_A, NODE_B, NODE_B, NOW + 2, 1, uplink_1, 3),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
     outbound = G[f"!{NODE_A:08x}"][f"!{uplink_1:08x}"][0]["label"]
     inbound = G[f"!{NODE_B:08x}"][f"!{uplink_1:08x}"][0]["label"]
     assert "Uplink: +0s@4" in outbound
     assert "Uplink (reply): +2s@3" in inbound
+
+
+def test_trace_graph_uplink_edge_label_self_reply_stays_on_destination_node(db):
+    neighbor_1 = 0xAAAA00AA
+    neighbor_2 = 0xAAAA00AB
+    _insert(db, TRACE_1, NODE_A, NODE_B, neighbor_1, NODE_B, is_reply=1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, neighbor_2, NODE_B, is_reply=1)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink "
+            "(trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node, hop_limit) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NODE_B, NOW, 1, NODE_B, 5),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    node_label = G.nodes[f"!{NODE_B:08x}"]["label"]
+    edge_1 = G[f"!{NODE_B:08x}"][f"!{neighbor_1:08x}"][0]["label"]
+    edge_2 = G[f"!{NODE_B:08x}"][f"!{neighbor_2:08x}"][0]["label"]
+    assert "Uplink (node reply): +0s@5" in node_label
+    assert "Uplink (reply):" not in edge_1
+    assert "Uplink (reply):" not in edge_2
 
 
 def test_trace_graph_uplink_node_fallback_label_outbound_origin(db):

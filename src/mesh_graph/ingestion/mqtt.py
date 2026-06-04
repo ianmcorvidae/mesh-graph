@@ -185,10 +185,10 @@ class MQTTDataSource(DataSource):
             is_reply = trace_direction == "REPLY"
             if is_reply:
                 route_back = rd.get("routeBack", [])
-                prev_node = route_back[-1] if route_back else to_id
+                prev_node = self._resolve_uplink_prev_node(route_back, via=via, default_node=to_id)
             else:
                 route = rd.get("route", [])
-                prev_node = route[-1] if route else from_id
+                prev_node = self._resolve_uplink_prev_node(route, via=via, default_node=from_id)
             record_trace_uplink(
                 conn,
                 trace_id=trace_id,
@@ -350,3 +350,14 @@ class MQTTDataSource(DataSource):
         if 0 <= normalized <= 7:
             return normalized
         return None
+
+    @staticmethod
+    def _resolve_uplink_prev_node(route: list[int], *, via: int, default_node: int) -> int:
+        if not route:
+            return default_node
+        # Some devices include the rebroadcasting uplink itself as the last hop.
+        # Use the closest preceding non-uplink hop when present.
+        for hop in reversed(route):
+            if hop != via:
+                return hop
+        return default_node

@@ -11,6 +11,8 @@ import sqlite3
 import pytest
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2, portnums_pb2
 
 from mesh_graph.db import get_links_for_network, get_links_for_trace, init_db
@@ -21,6 +23,22 @@ FROM_ID = 0xAAAA0001
 TO_ID = 0xAAAA0002
 GATEWAY_ID = 0xAAAA0099
 TRACE_ID = 12345
+
+NODE_IDS = st.integers(min_value=5, max_value=0xFFFFFFFE)
+
+
+def _expected_prev(route: list[int], via: int, fallback: int) -> int:
+    for hop in reversed(route):
+        if hop != via:
+            return hop
+    return fallback
+
+
+def _new_db_and_source():
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    return conn, MQTTDataSource(encryption_key=DEFAULT_KEY)
 
 
 @pytest.fixture
@@ -313,6 +331,18 @@ def test_traceroute_outbound_prev_node_is_last_route_hop(db, source):
     assert row["prev_node"] == HOP_B
 
 
+def test_traceroute_outbound_prev_node_uses_prior_hop_when_route_ends_with_uplink(db, source):
+    hop_before_uplink = 0xAAAA1111
+    payload = _make_traceroute_se(gateway_id=GATEWAY_ID, route=[hop_before_uplink, GATEWAY_ID])
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 0",
+        (TRACE_ID, FROM_ID, TO_ID),
+    ).fetchone()
+    assert row["prev_node"] == hop_before_uplink
+
+
 def test_traceroute_reply_records_one_uplink_row(db, source):
     """A REPLY packet should produce exactly one uplink row (is_reply=True) for the return path."""
     HOP_FWD = 0xAAAA1111
@@ -361,6 +391,26 @@ def test_traceroute_reply_prev_node_falls_back_when_route_back_empty(db, source)
     assert rows[0]["prev_node"] == TO_ID  # destination of traceroute
 
 
+def test_traceroute_reply_prev_node_uses_prior_hop_when_route_back_ends_with_uplink(db, source):
+    hop_before_uplink = 0xAAAA2222
+    payload = _make_traceroute_se(
+        packet_id=99999,
+        from_id=TO_ID,
+        to_id=FROM_ID,
+        gateway_id=GATEWAY_ID,
+        route_back=[hop_before_uplink, GATEWAY_ID],
+        want_response=False,
+        request_id=TRACE_ID,
+    )
+    source.handle_message(db, payload)
+    row = db.execute(
+        "SELECT prev_node FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ? AND is_reply = 1",
+        (TRACE_ID, FROM_ID, TO_ID, GATEWAY_ID),
+    ).fetchone()
+    assert row["prev_node"] == hop_before_uplink
+
+
 def test_traceroute_outbound_stores_route_len_only_on_terminal_link(db, source):
     payload = _make_traceroute_se(route=[0xAAAA1111, 0xAAAA2222], gateway_id=GATEWAY_ID)
     source.handle_message(db, payload)
@@ -401,6 +451,97 @@ def test_traceroute_reply_stores_route_back_len_only_on_terminal_link(db, source
     assert len(terminal) == 1
     assert terminal[0]["route_len"] == 2
     assert len(non_terminal) == 2
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    from_id=NODE_IDS,
+    to_id=NODE_IDS,
+    gateway_id=NODE_IDS,
+    packet_id=st.integers(min_value=1, max_value=0xFFFFFFFF),
+    data=st.data(),
+)
+def test_property_outbound_prev_node_matches_last_non_uplink_hop(
+    from_id, to_id, gateway_id, packet_id, data
+):
+    route = data.draw(
+        st.lists(
+            st.one_of(
+                st.sampled_from([gateway_id, from_id, to_id]),
+                NODE_IDS,
+            ),
+            min_size=0,
+            max_size=6,
+        )
+    )
+    db, source = _new_db_and_source()
+    try:
+        payload = _make_traceroute_se(
+            packet_id=packet_id,
+            from_id=from_id,
+            to_id=to_id,
+            gateway_id=gateway_id,
+            route=route,
+        )
+        source.handle_message(db, payload)
+        row = db.execute(
+            "SELECT prev_node, uplink_id, from_id FROM traceroute_uplink "
+            "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 0",
+            (packet_id, from_id, to_id),
+        ).fetchone()
+        assert row is not None
+        assert row["uplink_id"] == gateway_id
+        assert row["prev_node"] == _expected_prev(route, gateway_id, from_id)
+        assert row["prev_node"] != gateway_id or gateway_id == from_id
+    finally:
+        db.close()
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    from_id=NODE_IDS,
+    to_id=NODE_IDS,
+    gateway_id=NODE_IDS,
+    packet_id=st.integers(min_value=1, max_value=0xFFFFFFFF),
+    request_id=st.integers(min_value=1, max_value=0xFFFFFFFF),
+    data=st.data(),
+)
+def test_property_reply_prev_node_matches_last_non_uplink_hop(
+    from_id, to_id, gateway_id, packet_id, request_id, data
+):
+    route_back = data.draw(
+        st.lists(
+            st.one_of(
+                st.sampled_from([gateway_id, from_id, to_id]),
+                NODE_IDS,
+            ),
+            min_size=0,
+            max_size=6,
+        )
+    )
+    db, source = _new_db_and_source()
+    try:
+        payload = _make_traceroute_se(
+            packet_id=packet_id,
+            from_id=to_id,
+            to_id=from_id,
+            gateway_id=gateway_id,
+            route_back=route_back,
+            want_response=False,
+            request_id=request_id,
+        )
+        source.handle_message(db, payload)
+        row = db.execute(
+            "SELECT prev_node, uplink_id, to_id FROM traceroute_uplink "
+            "WHERE trace_id = ? AND from_id = ? AND to_id = ? AND is_reply = 1",
+            (request_id, from_id, to_id),
+        ).fetchone()
+        assert row is not None
+        assert row["uplink_id"] == gateway_id
+        assert row["prev_node"] == _expected_prev(route_back, gateway_id, to_id)
+        assert row["prev_node"] != gateway_id or gateway_id == to_id
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
