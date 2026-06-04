@@ -88,39 +88,81 @@ def _xor_link_color(link_start, link_end) -> str:
     return _edge_color(0)
 
 
-def _uplink_label_lines(uplink_rows: list[sqlite3.Row]) -> dict[str, list[str]]:
+def _uplink_edge_labels(uplink_rows: list[sqlite3.Row]) -> dict[tuple[str, str, bool], str]:
     """
-    Returns {node_name: [label_line, ...]} where each line covers one direction.
-    Outbound observations produce "Uplink: +Xs@H,..." and reply observations
-    produce "Uplink (reply): +Xs@H,...".  Only the lines that have observations
-    are included.  If there are only reply observations the outbound line is
-    omitted entirely.
+    Returns {(edge_start, edge_end, is_reply): "label"}.
+
+    Outbound uplink observations are attached to the rendered edge
+    prev_node -> uplink_id.
+    Reply uplink observations are attached to the rendered edge
+    prev_node -> uplink_id (with dir=back on reply edges).
     """
     if not uplink_rows:
         return {}
     base_ts = int(uplink_rows[0]["ts"])
-    # node_name -> {"out": [...], "reply": [...]}
-    buckets: dict[str, dict[str, list[str]]] = {}
+    buckets: dict[tuple[str, str, bool], dict[str, list[str]]] = {}
     for row in uplink_rows:
-        node_name = _node_str(row["uplink_id"])
-        b = buckets.setdefault(node_name, {"out": [], "reply": []})
+        uplink_name = _node_str(row["uplink_id"])
+        prev_name = _node_str(row["prev_node"])
+        is_reply = bool(row["is_reply"])
+        edge_key = (prev_name, uplink_name, is_reply)
+        b = buckets.setdefault(edge_key, {"out": [], "reply": []})
         rel_secs = int(row["ts"]) - base_ts
         hop_limit = row["hop_limit"]
         hop_str = str(hop_limit if hop_limit is not None else 0)
         part = f"+{rel_secs}s@{hop_str}"
-        if row["is_reply"]:
+        if is_reply:
             b["reply"].append(part)
         else:
             b["out"].append(part)
-    result: dict[str, list[str]] = {}
-    for node_name, b in buckets.items():
+    result: dict[tuple[str, str, bool], str] = {}
+    for edge_key, b in buckets.items():
         lines: list[str] = []
         if b["out"]:
             lines.append("Uplink: " + ",".join(b["out"]))
         if b["reply"]:
             lines.append("Uplink (reply): " + ",".join(b["reply"]))
-        result[node_name] = lines
+        result[edge_key] = "\n".join(lines)
     return result
+
+
+def _trace_node_style_attrs(
+    rows: list[sqlite3.Row], uplink_rows: list[sqlite3.Row], from_str: str, to_str: str
+) -> dict[str, dict[str, object]]:
+    outbound_nodes: set[str] = set()
+    inbound_nodes: set[str] = set()
+    for row in rows:
+        start = _node_str(row["link_start"])
+        end = _node_str(row["link_end"])
+        if row["is_reply"]:
+            inbound_nodes.update((start, end))
+        else:
+            outbound_nodes.update((start, end))
+
+    uplink_nodes = {_node_str(row["uplink_id"]) for row in uplink_rows}
+    endpoint_nodes = {from_str, to_str}
+    attrs: dict[str, dict[str, object]] = {}
+    for node_name in outbound_nodes | inbound_nodes | endpoint_nodes | uplink_nodes:
+        in_outbound = node_name in outbound_nodes
+        in_inbound = node_name in inbound_nodes
+        entry: dict[str, object] = {
+            "style": "filled",
+            "fillcolor": "#ffffff",
+            "penwidth": 1.2,
+            "peripheries": 1,
+        }
+        if node_name not in endpoint_nodes:
+            if in_outbound and in_inbound:
+                entry["style"] = "filled,solid"
+                entry["penwidth"] = 2.4
+            elif in_outbound:
+                entry["style"] = "filled,solid"
+            elif in_inbound:
+                entry["style"] = "filled,dashed"
+        if node_name in uplink_nodes:
+            entry["peripheries"] = 2
+        attrs[node_name] = entry
+    return attrs
 
 
 def _walk_single_outgoing_chain(
@@ -338,6 +380,9 @@ def build_trace_graph(
     trace_from_id = trace["from_id"]
     trace_to_id = trace["to_id"]
     destination_node = _node_str(trace_to_id)
+    from_str = _node_str(trace_from_id)
+    to_str = _node_str(trace_to_id)
+    uplink_edge_labels = _uplink_edge_labels(uplink_rows)
     fast_back_edges = {
         (_node_str(row["link_end"]), _node_str(row["link_start"]))
         for row in rows
@@ -368,29 +413,23 @@ def build_trace_graph(
             "label": _snr_label(row["snr"]),
             "weight": _snr_weight(row["snr"]),
         }
+        uplink_label = uplink_edge_labels.get((e0, e1, bool(row["is_reply"])))
+        if uplink_label:
+            attrs["label"] = f"{attrs['label']}\n{uplink_label}"
         if row["is_reply"]:
             attrs["dir"] = "back"
         if edge_is_fast_path:
             attrs["penwidth"] = 2
             attrs["weight"] = 20
         G.add_edge(e0, e1, **attrs)
-    from_str = _node_str(trace_from_id)
-    to_str = _node_str(trace_to_id)
     for n in (from_str, to_str):
         if not G.has_node(n):
             G.add_node(n)
 
     nx.set_node_attributes(G, get_node_attrs(conn))
-    uplink_label_lines = _uplink_label_lines(uplink_rows)
-    if uplink_label_lines:
-        uplink_attrs: dict[str, dict[str, str]] = {}
-        for node_name, lines in uplink_label_lines.items():
-            if not G.has_node(node_name):
-                continue
-            existing_label = str(G.nodes[node_name].get("label", node_name))
-            uplink_attrs[node_name] = {"label": existing_label + "\n" + "\n".join(lines)}
-        if uplink_attrs:
-            nx.set_node_attributes(G, uplink_attrs)
+    node_style_attrs = _trace_node_style_attrs(rows, uplink_rows, from_str=from_str, to_str=to_str)
+    if node_style_attrs:
+        nx.set_node_attributes(G, node_style_attrs)
     nx.set_node_attributes(
         G,
         {

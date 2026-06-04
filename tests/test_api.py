@@ -398,7 +398,7 @@ def test_trace_graph_invalid_direction_returns_422(client, db):
     assert resp.status_code == 422
 
 
-def test_trace_graph_displays_uplink_times_on_uplink_nodes(client, db):
+def test_trace_graph_displays_uplink_times_on_edges(client, db):
     uplink_1 = 0xAAAA0099
     uplink_2 = 0xAAAA00AB
     _insert(
@@ -418,6 +418,10 @@ def test_trace_graph_displays_uplink_times_on_uplink_nodes(client, db):
         db.execute(
             "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) VALUES (?,?,?,?,?,?,?)",
             (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4, 0, NODE_A),
+        )
+        db.execute(
+            "UPDATE traceroute_uplink SET prev_node = ? WHERE trace_id = ? AND from_id = ? AND to_id = ? AND uplink_id = ?",
+            (uplink_1, TRACE_1, NODE_A, NODE_B, uplink_2),
         )
     resp = client.get(f"/graph/trace/{TRACE_1}?format=svg")
     assert resp.status_code == 200

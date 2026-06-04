@@ -320,7 +320,7 @@ def test_trace_graph_highlights_from_to_nodes(db):
     assert G.graph["rank_sink_node"] == node_b_str
 
 
-def test_trace_graph_adds_relative_uplink_time_to_uplink_node_labels(db):
+def test_trace_graph_adds_relative_uplink_time_to_matching_edges(db):
     uplink_1 = 0xAAAA0099
     uplink_2 = 0xAAAA00AB
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
@@ -335,16 +335,18 @@ def test_trace_graph_adds_relative_uplink_time_to_uplink_node_labels(db):
         db.execute(
             "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
             "VALUES (?,?,?,?,?,?,?)",
-            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4, 0, NODE_A),
+            (TRACE_1, NODE_A, NODE_B, uplink_2, NOW + 4, 0, uplink_1),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
     assert G is not None
-    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s@0")
-    assert G.nodes[f"!{uplink_2:08x}"]["label"].endswith("\nUplink: +4s@0")
+    edge_1 = G[f"!{NODE_A:08x}"][f"!{uplink_1:08x}"][0]
+    edge_2 = G[f"!{uplink_1:08x}"][f"!{uplink_2:08x}"][0]
+    assert "Uplink: +0s@0" in edge_1["label"]
+    assert "Uplink: +4s@0" in edge_2["label"]
     assert "label" not in G.graph
 
 
-def test_trace_graph_uplink_label_shows_hop_limit(db):
+def test_trace_graph_uplink_edge_label_shows_hop_limit(db):
     uplink_1 = 0xAAAA0099
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
     _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
@@ -356,13 +358,13 @@ def test_trace_graph_uplink_label_shows_hop_limit(db):
             (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 0, NODE_A, 7, 5),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
-    assert G.nodes[f"!{uplink_1:08x}"]["label"].endswith("\nUplink: +0s@5")
+    edge = G[f"!{NODE_A:08x}"][f"!{uplink_1:08x}"][0]
+    assert "Uplink: +0s@5" in edge["label"]
 
 
-def test_trace_graph_uplink_label_reply_only(db):
+def test_trace_graph_uplink_edge_label_reply_only(db):
     uplink_1 = 0xAAAA0099
-    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
-    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B, is_reply=1)
     with db:
         db.execute(
             "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
@@ -370,15 +372,15 @@ def test_trace_graph_uplink_label_reply_only(db):
             (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 1, NODE_B),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
-    label = G.nodes[f"!{uplink_1:08x}"]["label"]
+    label = G[f"!{NODE_B:08x}"][f"!{uplink_1:08x}"][0]["label"]
     assert "Uplink (reply): +0s@0" in label
     assert "Uplink: +" not in label.split("Uplink (reply):")[0]
 
 
-def test_trace_graph_uplink_label_both_directions(db):
+def test_trace_graph_uplink_edge_label_both_directions(db):
     uplink_1 = 0xAAAA0099
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
-    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B)
+    _insert(db, TRACE_1, NODE_A, NODE_B, uplink_1, NODE_B, is_reply=1)
     with db:
         db.execute(
             "INSERT INTO traceroute_uplink "
@@ -393,8 +395,58 @@ def test_trace_graph_uplink_label_both_directions(db):
             (TRACE_1, NODE_A, NODE_B, uplink_1, NOW + 2, 1, NODE_B, 3),
         )
     G = build_trace_graph(db, trace_id=TRACE_1)
-    label = G.nodes[f"!{uplink_1:08x}"]["label"]
-    assert "\nUplink: +0s@4\nUplink (reply): +2s@3" in label
+    outbound = G[f"!{NODE_A:08x}"][f"!{uplink_1:08x}"][0]["label"]
+    inbound = G[f"!{NODE_B:08x}"][f"!{uplink_1:08x}"][0]["label"]
+    assert "Uplink: +0s@4" in outbound
+    assert "Uplink (reply): +2s@3" in inbound
+
+
+def test_trace_graph_applies_uplink_line_style_to_endpoints(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NODE_A, NOW, 0, NODE_A),
+        )
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NODE_B, NOW + 2, 1, NODE_A),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    source = G.nodes[f"!{NODE_A:08x}"]
+    sink = G.nodes[f"!{NODE_B:08x}"]
+    assert source["peripheries"] == 2
+    assert sink["peripheries"] == 2
+
+
+def test_trace_graph_direction_line_styles_skip_endpoints(db):
+    node_d = 0xAAAA0004
+    node_e = 0xAAAA0005
+    node_f = 0xAAAA0006
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_d, is_reply=0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, node_d, is_reply=1)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_e, is_reply=0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, node_f, is_reply=1)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    assert G.nodes[f"!{NODE_A:08x}"]["fillcolor"] == "#ffa9a9"
+    assert G.nodes[f"!{NODE_B:08x}"]["fillcolor"] == "#a9a9ff"
+    assert G.nodes[f"!{NODE_A:08x}"]["style"] == "filled"
+    assert G.nodes[f"!{NODE_B:08x}"]["style"] == "filled"
+
+    both_dir = G.nodes[f"!{node_d:08x}"]
+    out_only = G.nodes[f"!{node_e:08x}"]
+    in_only = G.nodes[f"!{node_f:08x}"]
+    assert both_dir["style"] == "filled,solid"
+    assert both_dir["penwidth"] == 2.4
+    assert out_only["style"] == "filled,solid"
+    assert out_only["penwidth"] == 1.2
+    assert in_only["style"] == "filled,dashed"
+    assert in_only["penwidth"] == 1.2
+    assert both_dir["fillcolor"] == "#ffffff"
+    assert out_only["fillcolor"] == "#ffffff"
+    assert in_only["fillcolor"] == "#ffffff"
 
 
 # ---------------------------------------------------------------------------
