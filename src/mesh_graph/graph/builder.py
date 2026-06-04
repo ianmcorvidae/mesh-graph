@@ -88,9 +88,18 @@ def _xor_link_color(link_start, link_end) -> str:
     return _edge_color(0)
 
 
-def _uplink_edge_labels(uplink_rows: list[sqlite3.Row]) -> dict[tuple[str, str, bool], str]:
+def _uplink_labels(
+    uplink_rows: list[sqlite3.Row],
+    trace_rows: list[sqlite3.Row],
+    *,
+    source_node: str,
+    destination_node: str,
+) -> tuple[dict[tuple[str, str, bool], str], dict[str, list[str]]]:
     """
-    Returns {(edge_start, edge_end, is_reply): "label"}.
+    Returns:
+      1) {(edge_start, edge_end, is_reply): "label"} for regular edge labels.
+      2) {node_name: [label_line, ...]} for fallback node labels in the two
+         endpoint-only edge-less cases: source outbound and destination reply.
 
     Outbound uplink observations are attached to the rendered edge
     prev_node -> uplink_id.
@@ -98,32 +107,77 @@ def _uplink_edge_labels(uplink_rows: list[sqlite3.Row]) -> dict[tuple[str, str, 
     prev_node -> uplink_id (with dir=back on reply edges).
     """
     if not uplink_rows:
-        return {}
+        return {}, {}
     base_ts = int(uplink_rows[0]["ts"])
+    incoming_by_node_dir: dict[tuple[str, bool], set[str]] = {}
+    outgoing_by_node_dir: dict[tuple[str, bool], set[str]] = {}
+    for row in trace_rows:
+        if row["is_reply"]:
+            edge_start = _node_str(row["link_end"])
+            edge_end = _node_str(row["link_start"])
+            is_reply_edge = True
+        else:
+            edge_start = _node_str(row["link_start"])
+            edge_end = _node_str(row["link_end"])
+            is_reply_edge = False
+        incoming_by_node_dir.setdefault((edge_end, is_reply_edge), set()).add(edge_start)
+        outgoing_by_node_dir.setdefault((edge_start, is_reply_edge), set()).add(edge_end)
+
     buckets: dict[tuple[str, str, bool], dict[str, list[str]]] = {}
+    node_buckets: dict[str, dict[str, list[str]]] = {}
     for row in uplink_rows:
         uplink_name = _node_str(row["uplink_id"])
         prev_name = _node_str(row["prev_node"])
         is_reply = bool(row["is_reply"])
-        edge_key = (prev_name, uplink_name, is_reply)
-        b = buckets.setdefault(edge_key, {"out": [], "reply": []})
         rel_secs = int(row["ts"]) - base_ts
         hop_limit = row["hop_limit"]
         hop_str = str(hop_limit if hop_limit is not None else 0)
         part = f"+{rel_secs}s@{hop_str}"
+        is_endpoint_fallback = prev_name == uplink_name and (
+            (not is_reply and uplink_name == source_node)
+            or (is_reply and uplink_name == destination_node)
+        )
+        if is_endpoint_fallback:
+            node_bucket = node_buckets.setdefault(uplink_name, {"out": [], "reply": []})
+            if is_reply:
+                node_bucket["reply"].append(part)
+            else:
+                node_bucket["out"].append(part)
+            continue
+        if prev_name == uplink_name:
+            if is_reply:
+                outgoing = outgoing_by_node_dir.get((uplink_name, True), set())
+                if len(outgoing) == 1:
+                    # For reply rendering, keying the opposite orientation lets
+                    # reverse-edge fallback attach to the drawn edge.
+                    prev_name = next(iter(outgoing))
+            else:
+                incoming = incoming_by_node_dir.get((uplink_name, False), set())
+                if len(incoming) == 1:
+                    prev_name = next(iter(incoming))
+        edge_key = (prev_name, uplink_name, is_reply)
+        b = buckets.setdefault(edge_key, {"out": [], "reply": []})
         if is_reply:
             b["reply"].append(part)
         else:
             b["out"].append(part)
-    result: dict[tuple[str, str, bool], str] = {}
+    edge_result: dict[tuple[str, str, bool], str] = {}
     for edge_key, b in buckets.items():
         lines: list[str] = []
         if b["out"]:
             lines.append("Uplink: " + ",".join(b["out"]))
         if b["reply"]:
             lines.append("Uplink (reply): " + ",".join(b["reply"]))
-        result[edge_key] = "\n".join(lines)
-    return result
+        edge_result[edge_key] = "\n".join(lines)
+    node_result: dict[str, list[str]] = {}
+    for node_name, b in node_buckets.items():
+        lines: list[str] = []
+        if b["out"]:
+            lines.append("Uplink (node): " + ",".join(b["out"]))
+        if b["reply"]:
+            lines.append("Uplink (node reply): " + ",".join(b["reply"]))
+        node_result[node_name] = lines
+    return edge_result, node_result
 
 
 def _trace_node_style_attrs(
@@ -382,7 +436,23 @@ def build_trace_graph(
     destination_node = _node_str(trace_to_id)
     from_str = _node_str(trace_from_id)
     to_str = _node_str(trace_to_id)
-    uplink_edge_labels = _uplink_edge_labels(uplink_rows)
+    if direction == "out":
+        filtered_uplink_rows = [row for row in uplink_rows if not row["is_reply"]]
+    elif direction == "in":
+        filtered_uplink_rows = [row for row in uplink_rows if row["is_reply"]]
+    else:
+        filtered_uplink_rows = uplink_rows
+    filtered_rows = [
+        row
+        for row in rows
+        if (direction != "out" or not row["is_reply"]) and (direction != "in" or row["is_reply"])
+    ]
+    uplink_edge_labels, uplink_node_labels = _uplink_labels(
+        filtered_uplink_rows,
+        filtered_rows,
+        source_node=from_str,
+        destination_node=to_str,
+    )
     fast_back_edges = {
         (_node_str(row["link_end"]), _node_str(row["link_start"]))
         for row in rows
@@ -391,7 +461,7 @@ def build_trace_graph(
     if not fast_back_edges:
         fast_back_edges = _fallback_fast_back_reply_edges(rows, destination_node)
 
-    for row in rows:
+    for row in filtered_rows:
         if direction == "out" and row["is_reply"]:
             continue
         if direction == "in" and not row["is_reply"]:
@@ -413,7 +483,12 @@ def build_trace_graph(
             "label": _snr_label(row["snr"]),
             "weight": _snr_weight(row["snr"]),
         }
-        uplink_label = uplink_edge_labels.get((e0, e1, bool(row["is_reply"])))
+        is_reply_edge = bool(row["is_reply"])
+        uplink_label = uplink_edge_labels.get((e0, e1, is_reply_edge))
+        if uplink_label is None and is_reply_edge:
+            # Some traces store reply link endpoints opposite to test fixtures.
+            # Accept either orientation for matching reply uplink labels.
+            uplink_label = uplink_edge_labels.get((e1, e0, True))
         if uplink_label:
             attrs["label"] = f"{attrs['label']}\n{uplink_label}"
         if row["is_reply"]:
@@ -427,7 +502,18 @@ def build_trace_graph(
             G.add_node(n)
 
     nx.set_node_attributes(G, get_node_attrs(conn))
-    node_style_attrs = _trace_node_style_attrs(rows, uplink_rows, from_str=from_str, to_str=to_str)
+    if uplink_node_labels:
+        fallback_attrs: dict[str, dict[str, str]] = {}
+        for node_name, lines in uplink_node_labels.items():
+            if not G.has_node(node_name):
+                continue
+            existing_label = str(G.nodes[node_name].get("label", node_name))
+            fallback_attrs[node_name] = {"label": existing_label + "\n" + "\n".join(lines)}
+        if fallback_attrs:
+            nx.set_node_attributes(G, fallback_attrs)
+    node_style_attrs = _trace_node_style_attrs(
+        rows, filtered_uplink_rows, from_str=from_str, to_str=to_str
+    )
     if node_style_attrs:
         nx.set_node_attributes(G, node_style_attrs)
     nx.set_node_attributes(

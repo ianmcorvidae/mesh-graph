@@ -343,6 +343,8 @@ def test_trace_graph_adds_relative_uplink_time_to_matching_edges(db):
     edge_2 = G[f"!{uplink_1:08x}"][f"!{uplink_2:08x}"][0]
     assert "Uplink: +0s@0" in edge_1["label"]
     assert "Uplink: +4s@0" in edge_2["label"]
+    assert "Uplink (node):" not in G.nodes[f"!{uplink_1:08x}"]["label"]
+    assert "Uplink (node):" not in G.nodes[f"!{uplink_2:08x}"]["label"]
     assert "label" not in G.graph
 
 
@@ -377,6 +379,21 @@ def test_trace_graph_uplink_edge_label_reply_only(db):
     assert "Uplink: +" not in label.split("Uplink (reply):")[0]
 
 
+def test_trace_graph_uplink_edge_label_reply_only_ingestion_orientation(db):
+    uplink_1 = 0xAAAA0099
+    # Ingested reply links are commonly stored as prev_node -> uplink.
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, uplink_1, is_reply=1)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 1, NODE_B),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    label = G[f"!{uplink_1:08x}"][f"!{NODE_B:08x}"][0]["label"]
+    assert "Uplink (reply): +0s@0" in label
+
+
 def test_trace_graph_uplink_edge_label_both_directions(db):
     uplink_1 = 0xAAAA0099
     _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
@@ -399,6 +416,68 @@ def test_trace_graph_uplink_edge_label_both_directions(db):
     inbound = G[f"!{NODE_B:08x}"][f"!{uplink_1:08x}"][0]["label"]
     assert "Uplink: +0s@4" in outbound
     assert "Uplink (reply): +2s@3" in inbound
+
+
+def test_trace_graph_uplink_node_fallback_label_outbound_origin(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, is_reply=0)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NODE_A, NOW, 0, NODE_A),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    label = G.nodes[f"!{NODE_A:08x}"]["label"]
+    assert "Uplink (node): +0s@0" in label
+    assert "Uplink (node reply):" not in label
+
+
+def test_trace_graph_uplink_node_fallback_label_reply_destination(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, is_reply=1)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, NODE_B, NOW, 1, NODE_B),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    label = G.nodes[f"!{NODE_B:08x}"]["label"]
+    assert "Uplink (node reply): +0s@0" in label
+    assert "Uplink (node):" not in label
+
+
+def test_trace_graph_maps_non_endpoint_self_uplink_to_unique_incoming_edge(db):
+    uplink_1 = 0xAAAA0099
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, uplink_1)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 0, uplink_1),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    node_label = G.nodes[f"!{uplink_1:08x}"]["label"]
+    edge_label = G[f"!{NODE_A:08x}"][f"!{uplink_1:08x}"][0]["label"]
+    assert "Uplink (node):" not in node_label
+    assert "Uplink (node reply):" not in node_label
+    assert "Uplink: +0s@0" in edge_label
+
+
+def test_trace_graph_maps_non_endpoint_self_reply_uplink_to_unique_edge(db):
+    uplink_1 = 0xAAAA0099
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, uplink_1, is_reply=1)
+    with db:
+        db.execute(
+            "INSERT INTO traceroute_uplink (trace_id, from_id, to_id, uplink_id, ts, is_reply, prev_node) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (TRACE_1, NODE_A, NODE_B, uplink_1, NOW, 1, uplink_1),
+        )
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    node_label = G.nodes[f"!{uplink_1:08x}"]["label"]
+    edge_label = G[f"!{uplink_1:08x}"][f"!{NODE_B:08x}"][0]["label"]
+    assert "Uplink (node):" not in node_label
+    assert "Uplink (node reply):" not in node_label
+    assert "Uplink (reply): +0s@0" in edge_label
 
 
 def test_trace_graph_applies_uplink_line_style_to_endpoints(db):
