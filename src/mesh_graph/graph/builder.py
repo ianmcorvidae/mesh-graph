@@ -14,6 +14,9 @@ from mesh_graph.db import (
 )
 from mesh_graph.observability import traced_span
 
+_OVERFLOW_ROUTE_LENGTHS = frozenset({8})
+_OVERFLOW_EDGE_COLOR = "#ee5500"
+
 
 def _node_str(val) -> str:
     if isinstance(val, int):
@@ -52,6 +55,16 @@ def _snr_color(snr: Optional[float]) -> str:
 
 def _snr_label(snr) -> str:
     return f"{'?' if snr is None else snr}dB"
+
+
+def _overflow_route_cap(route_len: object) -> Optional[int]:
+    if route_len is None:
+        return None
+    try:
+        normalized = int(route_len)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized in _OVERFLOW_ROUTE_LENGTHS else None
 
 
 def _snr_range_label(snrs: list[float]) -> str:
@@ -497,24 +510,29 @@ def build_trace_graph(
         else:
             e0 = _node_str(row["link_start"])
             e1 = _node_str(row["link_end"])
-        color = _snr_color(row["snr"])
+        overflow_cap = _overflow_route_cap(row["route_len"])
+        color = _OVERFLOW_EDGE_COLOR if overflow_cap is not None else _snr_color(row["snr"])
         edge_is_fast_path = (
             row["is_fast_path"] if not row["is_reply"] else (e0, e1) in fast_back_edges
         )
         attrs = {
             "color": color,
             "fontcolor": color,
-            "style": "dashed" if row["is_reply"] else "solid",
+            "style": "dotted"
+            if overflow_cap is not None
+            else ("dashed" if row["is_reply"] else "solid"),
             "label": _snr_label(row["snr"]),
             "weight": _snr_weight(row["snr"]),
         }
+        if overflow_cap is not None:
+            attrs["label"] = f"{attrs['label']} (>={overflow_cap} hops)"
         is_reply_edge = bool(row["is_reply"])
         uplink_label = uplink_edge_labels.get((e0, e1, is_reply_edge))
         if uplink_label:
             attrs["label"] = f"{attrs['label']}\n{uplink_label}"
         if row["is_reply"]:
             attrs["dir"] = "back"
-        if edge_is_fast_path:
+        if edge_is_fast_path and overflow_cap is None:
             attrs["penwidth"] = 2
             attrs["weight"] = 20
         G.add_edge(e0, e1, **attrs)

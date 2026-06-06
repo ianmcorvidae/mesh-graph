@@ -39,6 +39,7 @@ def _insert(
     snr=None,
     is_reply=0,
     is_fast_path=0,
+    route_len=None,
     ts=None,
 ):
     ts = ts or NOW
@@ -49,9 +50,20 @@ def _insert(
         )
         db.execute(
             "INSERT OR IGNORE INTO traceroute_link "
-            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path),
+            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path, route_len) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                trace_id,
+                from_id,
+                to_id,
+                ts,
+                link_start,
+                link_end,
+                snr,
+                is_reply,
+                is_fast_path,
+                route_len,
+            ),
         )
 
 
@@ -246,6 +258,27 @@ def test_trace_graph_uses_snr_gradient_colors(db):
     assert edge_by_label["10.0dB"]["color"] == "#00cc44"
     assert edge_by_label["?dB"]["color"] == "#888888"
     assert edge_by_label["0.0dB"]["fontcolor"] == "#cccc00"
+
+
+def test_trace_graph_marks_full_route_terminal_outbound_edge(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B, snr=3.0)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_C, snr=5.0, route_len=8)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge = G[f"!{NODE_B:08x}"][f"!{NODE_C:08x}"][0]
+    assert edge["style"] == "dotted"
+    assert edge["color"] == "#ee5500"
+    assert edge["fontcolor"] == "#ee5500"
+    assert edge["label"] == "5.0dB (>=8 hops)"
+
+
+def test_trace_graph_marks_full_route_terminal_reply_edge(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_B, NODE_C, snr=7.0, is_reply=1, route_len=8)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    edge = G[f"!{NODE_C:08x}"][f"!{NODE_B:08x}"][0]
+    assert edge["style"] == "dotted"
+    assert edge["color"] == "#ee5500"
+    assert edge["label"] == "7.0dB (>=8 hops)"
+    assert edge["dir"] == "back"
 
 
 def test_trace_graph_marks_ingested_reply_fast_path_with_penwidth(db):
