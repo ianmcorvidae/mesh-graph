@@ -111,13 +111,13 @@ def test_upsert_node_update(db):
 def test_get_node_attrs_shape_router(db):
     upsert_node(db, 0x11111111, long_name="R", short_name="R", role="ROUTER")
     attrs = get_node_attrs(db)
-    assert attrs["!11111111"]["shape"] == "rect"
+    assert attrs["!11111111"]["shape"] == "diamond"
 
 
 def test_get_node_attrs_shape_client(db):
     upsert_node(db, 0x22222222, long_name="C", short_name="C", role="CLIENT")
     attrs = get_node_attrs(db)
-    assert attrs["!22222222"]["shape"] == "diamond"
+    assert attrs["!22222222"]["shape"] == "rect"
 
 
 def test_get_node_attrs_unknown_node_from_links(db):

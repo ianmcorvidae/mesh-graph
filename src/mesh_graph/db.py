@@ -187,11 +187,11 @@ def _node_color(nodenum: int) -> str:
 
 
 def _role_shape(role: Optional[str]) -> Optional[str]:
-    if role in ("ROUTER", "ROUTER_CLIENT", "REPEATER"):
-        return "rect"
-    if role in ("CLIENT", "CLIENT_BASE", "ROUTER_LATE", None):
+    if role in ("ROUTER", "ROUTER_CLIENT", "ROUTER_LATE", "REPEATER"):
         return "diamond"
-    return None
+    if role in ("CLIENT", "CLIENT_BASE", None):
+        return "rect"
+    return None  # CLIENT_MUTE, TRACKER, SENSOR, etc.
 
 
 def get_links_for_network(
