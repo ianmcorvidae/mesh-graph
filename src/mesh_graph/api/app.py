@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
@@ -18,6 +18,16 @@ from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
 
 _MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
+_NETWORK_GRAPH_QUERY_PARAMS = {
+    "format",
+    "start",
+    "end",
+    "snr_labels",
+    "include_unknown_nodes",
+    "include_clients",
+}
+_TRACE_GRAPH_QUERY_PARAMS = {"format", "from", "to", "date", "direction"}
+_NODE_GRAPH_QUERY_PARAMS = {"format", "start", "end", "direction", "depth"}
 
 
 def _parse_iso(value: Optional[str]) -> Optional[int]:
@@ -54,6 +64,19 @@ def _parse_time_range(
         raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
 
+def _reject_unknown_query_params(request: Request, allowed_params: set[str]) -> None:
+    unknown = sorted(
+        {param for param in request.query_params.keys() if param not in allowed_params}
+    )
+    if unknown:
+        unknown_str = ", ".join(unknown)
+        allowed_str = ", ".join(sorted(allowed_params))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown query parameter(s): {unknown_str}. Allowed parameters: {allowed_str}",
+        )
+
+
 def create_app(
     db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None
 ) -> FastAPI:
@@ -63,6 +86,7 @@ def create_app(
 
     @app.get("/graph/network")
     def graph_network(
+        request: Request,
         format: str = Query(default="svg"),
         start: Optional[str] = Query(default=None),
         end: Optional[str] = Query(default=None),
@@ -80,6 +104,7 @@ def create_app(
                 "include_clients": include_clients,
             },
         ):
+            _reject_unknown_query_params(request, _NETWORK_GRAPH_QUERY_PARAMS)
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             with traced_span("parse_time_range", warn_ms=50):
@@ -107,6 +132,7 @@ def create_app(
     @app.get("/graph/trace/{trace_id}")
     def graph_trace(
         trace_id: int,
+        request: Request,
         format: str = Query(default="svg"),
         from_node: Optional[str] = Query(default=None, alias="from"),
         to_node: Optional[str] = Query(default=None, alias="to"),
@@ -118,6 +144,7 @@ def create_app(
             warn_ms=5000,
             attributes={"format": format, "trace_id": trace_id, "direction": direction},
         ):
+            _reject_unknown_query_params(request, _TRACE_GRAPH_QUERY_PARAMS)
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             try:
@@ -157,6 +184,7 @@ def create_app(
     @app.get("/graph/node/{node_id}")
     def graph_node(
         node_id: str,
+        request: Request,
         format: str = Query(default="svg"),
         start: Optional[str] = Query(default=None),
         end: Optional[str] = Query(default=None),
@@ -168,6 +196,7 @@ def create_app(
             warn_ms=5000,
             attributes={"format": format, "direction": direction, "depth": depth},
         ):
+            _reject_unknown_query_params(request, _NODE_GRAPH_QUERY_PARAMS)
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             try:

@@ -100,6 +100,13 @@ def test_network_graph_invalid_format(client, db):
     assert resp.status_code == 400
 
 
+def test_network_graph_unknown_query_param_returns_400(client, db):
+    _insert(db)
+    resp = client.get("/graph/network?since=123")
+    assert resp.status_code == 400
+    assert "since" in resp.json()["detail"]
+
+
 def test_network_graph_can_include_snr_labels(client, db):
     _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=3.5)
     resp = client.get("/graph/network?format=svg&snr_labels=true&include_clients=true")
@@ -338,6 +345,13 @@ def test_trace_graph_invalid_date_returns_422(client, db):
     assert resp.status_code == 422
 
 
+def test_trace_graph_unknown_query_param_returns_400(client, db):
+    _insert(db)
+    resp = client.get(f"/graph/trace/{TRACE_1}?start=2024-01-01T00:00:00Z")
+    assert resp.status_code == 400
+    assert "start" in resp.json()["detail"]
+
+
 def test_trace_graph_direction_out_shows_only_outbound_edges(client, db):
     _insert(
         db,
@@ -477,6 +491,15 @@ def test_node_graph_invalid_time_returns_422(client, db):
 def test_node_graph_invalid_node_id(client, db):
     resp = client.get("/graph/node/notanodeid")
     assert resp.status_code == 422
+
+
+def test_node_graph_unknown_query_params_return_400(client, db):
+    _insert(db)
+    resp = client.get(f"/graph/node/!{NODE_A:08x}?since=123&to=foo")
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "since" in detail
+    assert "to" in detail
 
 
 def test_node_graph_accepts_direction_and_depth(client, db):
