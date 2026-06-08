@@ -445,6 +445,72 @@ def test_trace_graph_displays_uplink_times_on_edges(client, db):
     assert b"Uplink: +4s@0" in resp.content
 
 
+def test_trace_graph_communities_default_disabled(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_B,
+        to_id=0xAAAA0003,
+        link_start=NODE_B,
+        link_end=0xAAAA0003,
+    )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    assert resp.status_code == 200
+    assert b"cluster_" not in resp.content
+
+
+def test_trace_graph_communities_enabled_true(client, db):
+    node_c = 0xAAAA0003
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=node_c)
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=node_c, link_end=NODE_B)
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=true")
+    assert resp.status_code == 200
+
+
+def test_trace_graph_communities_with_custom_resolution(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_B,
+        to_id=0xAAAA0003,
+        link_start=NODE_B,
+        link_end=0xAAAA0003,
+    )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=0.5")
+    assert resp.status_code == 200
+
+
+def test_trace_graph_communities_false_explicit(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_B,
+        to_id=0xAAAA0003,
+        link_start=NODE_B,
+        link_end=0xAAAA0003,
+    )
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=false")
+    assert resp.status_code == 200
+    assert b"cluster_" not in resp.content
+
+
+def test_trace_graph_communities_zero_disabled(client, db):
+    _insert(db)
+    resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=0")
+    assert resp.status_code == 200
+    assert b"cluster_" not in resp.content
+
+
+def test_trace_graph_communities_invalid_value_returns_422(client, db):
+    _insert(db)
+    resp = client.get(f"/graph/trace/{TRACE_1}?communities=not-a-number")
+    assert resp.status_code == 422
+    assert "Invalid communities value" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # /graph/node/{node_id}
 # ---------------------------------------------------------------------------

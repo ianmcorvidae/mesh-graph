@@ -583,6 +583,81 @@ def test_trace_graph_direction_line_styles_skip_endpoints(db):
 
 
 # ---------------------------------------------------------------------------
+# build_trace_graph — community detection
+# ---------------------------------------------------------------------------
+
+
+def test_trace_graph_no_community_when_resolution_none(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_C, NODE_B, NODE_C)
+    G = build_trace_graph(db, trace_id=TRACE_1)
+    for _, data in G.nodes(data=True):
+        assert "community_id" not in data
+    assert "community_labels" not in G.graph
+
+
+def test_trace_graph_community_assigns_ids_and_labels(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_C, NODE_B, NODE_C)
+    G = build_trace_graph(db, trace_id=TRACE_1, resolution=1.0)
+    assert G is not None
+    for _, data in G.nodes(data=True):
+        assert "community_id" in data
+        assert isinstance(data["community_id"], int)
+    assert "community_labels" in G.graph
+    labels = G.graph["community_labels"]
+    assert isinstance(labels, dict)
+    for cid, label in labels.items():
+        assert "nodes)" in label
+
+
+def test_trace_graph_community_hub_uses_long_name(db):
+    upsert_node(db, NODE_A, long_name="Alpha Long", short_name="ALPHA", role="ROUTER")
+    upsert_node(db, NODE_B, long_name="Beta Long", short_name="BETA", role="ROUTER")
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    G = build_trace_graph(db, trace_id=TRACE_1, resolution=1.0)
+    assert G is not None
+    labels = G.graph["community_labels"]
+    for label in labels.values():
+        assert "Alpha Long" in label or "Beta Long" in label
+
+
+def test_trace_graph_community_single_edge(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    G = build_trace_graph(db, trace_id=TRACE_1, resolution=1.0)
+    assert G is not None
+    assert all("community_id" in d for _, d in G.nodes(data=True))
+    assert len(G.graph["community_labels"]) == 1
+    assert "(2 nodes)" in list(G.graph["community_labels"].values())[0]
+
+
+def test_trace_graph_community_with_custom_resolution(db):
+    node_d = 0xAAAA0004
+    node_e = 0xAAAA0005
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, node_d)
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_d, node_e)
+    _insert(db, TRACE_1, NODE_A, NODE_B, node_e, NODE_B)
+    G = build_trace_graph(db, trace_id=TRACE_1, resolution=0.5)
+    assert G is not None
+    communities = set()
+    for _, d in G.nodes(data=True):
+        cid = d.get("community_id")
+        if cid is not None:
+            communities.add(cid)
+    assert len(communities) >= 1
+
+
+def test_trace_graph_community_fallback_on_zero_resolution(db):
+    _insert(db, TRACE_1, NODE_A, NODE_B, NODE_A, NODE_B)
+    _insert(db, TRACE_1, NODE_B, NODE_C, NODE_B, NODE_C)
+    G = build_trace_graph(db, trace_id=TRACE_1, resolution=0.0)
+    assert G is not None
+    for _, d in G.nodes(data=True):
+        assert "community_id" in d
+
+
+# ---------------------------------------------------------------------------
 # build_node_graph
 # ---------------------------------------------------------------------------
 

@@ -64,3 +64,57 @@ def test_to_pydot_adds_rank_source_and_sink_subgraphs():
     assert "rank=sink" in dot
     assert "src;" in dot
     assert "dst;" in dot
+
+
+def test_to_pydot_with_community_clusters():
+    G = nx.MultiDiGraph()
+    G.add_edge("a", "b")
+    G.add_edge("c", "d")
+    G.nodes["a"]["community_id"] = 0
+    G.nodes["b"]["community_id"] = 0
+    G.nodes["c"]["community_id"] = 1
+    G.nodes["d"]["community_id"] = 1
+    G.graph["community_labels"] = {0: "HubA (2 nodes)", 1: "HubC (2 nodes)"}
+
+    pd = _to_pydot(G, layout_prog="dot")
+    dot = pd.to_string()
+
+    assert "cluster_0" in dot
+    assert "cluster_1" in dot
+    assert "HubA (2 nodes)" in dot
+    assert "HubC (2 nodes)" in dot
+    assert "compound=true" in dot
+    assert "rounded" in dot
+
+
+def test_to_pydot_without_communities_no_clusters():
+    G = nx.MultiDiGraph()
+    G.add_edge("a", "b")
+    G.add_edge("c", "d")
+
+    pd = _to_pydot(G, layout_prog="dot")
+    dot = pd.to_string()
+
+    assert "cluster_" not in dot
+    assert "compound" not in dot
+
+
+def test_to_pydot_community_uses_distinct_colors():
+    G = nx.MultiDiGraph()
+    G.add_edge("a", "b")
+    G.add_edge("c", "d")
+    G.nodes["a"]["community_id"] = 0
+    G.nodes["b"]["community_id"] = 0
+    G.nodes["c"]["community_id"] = 1
+    G.nodes["d"]["community_id"] = 1
+    G.graph["community_labels"] = {0: "C0", 1: "C1"}
+
+    pd = _to_pydot(G, layout_prog="dot")
+    dot = pd.to_string()
+
+    assert "cluster_" in dot
+
+    for sub in pd.get_subgraphs():
+        color = sub.get("color")
+        assert color is not None
+        assert str(color).startswith("#")

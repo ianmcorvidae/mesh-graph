@@ -4,6 +4,7 @@ import sqlite3
 from typing import Literal, Optional
 
 import networkx as nx
+import networkx.algorithms.community as nxcom
 
 from mesh_graph.db import (
     get_links_for_network,
@@ -442,6 +443,7 @@ def build_trace_graph(
     to_id: Optional[int] = None,
     approx_ts: Optional[int] = None,
     direction: Literal["both", "out", "in"] = "both",
+    resolution: Optional[float] = None,
 ):
     trace = get_trace_for_selector(
         conn,
@@ -564,6 +566,39 @@ def build_trace_graph(
     )
     G.graph["rank_source_node"] = from_str
     G.graph["rank_sink_node"] = to_str
+
+    if resolution is not None and G.number_of_edges() > 0:
+        undirected = nx.Graph()
+        for u, v, d in G.edges(data=True):
+            w = d.get("weight", 1)
+            if undirected.has_edge(u, v):
+                undirected[u][v]["weight"] = max(undirected[u][v]["weight"], w)
+            else:
+                undirected.add_edge(u, v, weight=w)
+        try:
+            communities = nxcom.louvain_communities(
+                undirected, weight="weight", resolution=resolution
+            )
+        except ZeroDivisionError:
+            communities = nxcom.asyn_lpa_communities(undirected, weight="weight")
+        for cid, members in enumerate(communities):
+            for node in members:
+                G.nodes[node]["community_id"] = cid
+
+        community_labels: dict[int, str] = {}
+        for cid, members in enumerate(communities):
+            hub = max(
+                members, key=lambda n: sum(1 for nb in undirected.neighbors(n) if nb in members)
+            )
+            existing_label = G.nodes[hub].get("label")
+            if isinstance(existing_label, str) and "\n" in existing_label:
+                hub_name = existing_label.split("\n")[1]
+            elif isinstance(existing_label, str):
+                hub_name = existing_label
+            else:
+                hub_name = hub
+            community_labels[cid] = f"{hub_name} ({len(members)} nodes)"
+        G.graph["community_labels"] = community_labels
 
     return G
 

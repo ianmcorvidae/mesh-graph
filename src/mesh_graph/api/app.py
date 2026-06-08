@@ -26,7 +26,7 @@ _NETWORK_GRAPH_QUERY_PARAMS = {
     "include_unknown_nodes",
     "include_clients",
 }
-_TRACE_GRAPH_QUERY_PARAMS = {"format", "from", "to", "date", "direction"}
+_TRACE_GRAPH_QUERY_PARAMS = {"format", "from", "to", "date", "direction", "communities"}
 _NODE_GRAPH_QUERY_PARAMS = {"format", "start", "end", "direction", "depth"}
 
 
@@ -138,6 +138,7 @@ def create_app(
         to_node: Optional[str] = Query(default=None, alias="to"),
         date: Optional[str] = Query(default=None),
         direction: Literal["both", "out", "in"] = Query(default="both"),
+        communities: str = Query(default="false"),
     ):
         with traced_span(
             "api.graph.trace",
@@ -160,6 +161,20 @@ def create_app(
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
+            communities_lower = communities.strip().lower()
+            if communities_lower in ("", "false", "0"):
+                resolution: Optional[float] = None
+            elif communities_lower == "true":
+                resolution = 1.0
+            else:
+                try:
+                    resolution = float(communities)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Invalid communities value {communities!r}. Use 'true', 'false', or a number.",
+                    )
+
             with traced_span("graph.build_trace_graph", warn_ms=2000) as span:
                 G = build_trace_graph(
                     db,
@@ -168,6 +183,7 @@ def create_app(
                     to_id=to_id,
                     approx_ts=approx_ts,
                     direction=direction,
+                    resolution=resolution,
                 )
                 if G is not None:
                     span.set_attribute("graph.node_count", len(G.nodes))
