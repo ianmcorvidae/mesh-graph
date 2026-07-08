@@ -11,8 +11,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from mesh_graph.api.app import _parse_node_id, create_app
-from mesh_graph.db import init_db
+from mesh_graph.api.app import create_app
+from mesh_graph.db import init_db, parse_node_id
 
 NOW = int(time.time())
 PAST = NOW - 7200
@@ -612,11 +612,11 @@ def test_node_graph_invalid_depth_returns_422(client, db):
 
 
 def test_node_id_plain_decimal_parses_as_decimal():
-    assert _parse_node_id("10") == 10
+    assert parse_node_id("10") == 10
 
 
 def test_node_id_plain_hex_still_supported():
-    assert _parse_node_id("a") == 10
+    assert parse_node_id("a") == 10
 
 
 # ---------------------------------------------------------------------------
@@ -630,7 +630,7 @@ def test_nodes_returns_json_list(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (NODE_A, "Alpha", "A", "CLIENT", NOW),
         )
-    resp = client.get("/nodes")
+    resp = client.get("/api/nodes")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
@@ -638,7 +638,7 @@ def test_nodes_returns_json_list(client, db):
 
 
 def test_nodes_empty_list(client, db):
-    resp = client.get("/nodes")
+    resp = client.get("/api/nodes")
     assert resp.status_code == 200
     assert resp.json() == []
 
@@ -653,7 +653,7 @@ def test_nodes_are_ordered_by_last_seen_desc(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (0x2, "New", "N", "CLIENT", NOW),
         )
-    resp = client.get("/nodes?after=%d&limit=10" % NOW)
+    resp = client.get("/api/nodes?after=%d&limit=10" % NOW)
     assert resp.status_code == 200
     data = resp.json()
     assert [n["nodenum"] for n in data] == [0x2, 0x1]
@@ -673,7 +673,7 @@ def test_nodes_support_after_cursor_and_limit(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (0x30, "C", "C", "CLIENT", NOW - 20),
         )
-    resp = client.get("/nodes?after=%d&limit=2" % (NOW - 10))
+    resp = client.get("/api/nodes?after=%d&limit=2" % (NOW - 10))
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
@@ -687,7 +687,7 @@ def test_nodes_support_after_cursor_and_limit(client, db):
 
 def test_traceroutes_returns_json_list(client, db):
     _insert(db)
-    resp = client.get("/traceroutes")
+    resp = client.get("/api/traceroutes")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
@@ -695,7 +695,7 @@ def test_traceroutes_returns_json_list(client, db):
 
 
 def test_traceroutes_empty_list(client, db):
-    resp = client.get("/traceroutes")
+    resp = client.get("/api/traceroutes")
     assert resp.status_code == 200
     assert resp.json() == []
 
@@ -703,7 +703,7 @@ def test_traceroutes_empty_list(client, db):
 def test_traceroutes_are_ordered_by_first_seen_desc(client, db):
     _insert(db, trace_id=3001, from_id=0x01, to_id=0x02, first_seen_ts=PAST, ts=PAST)
     _insert(db, trace_id=3002, from_id=0x03, to_id=0x04, first_seen_ts=NOW, ts=NOW)
-    resp = client.get("/traceroutes?after=%d&limit=10" % NOW)
+    resp = client.get("/api/traceroutes?after=%d&limit=10" % NOW)
     assert resp.status_code == 200
     data = resp.json()
     assert [t["trace_id"] for t in data] == [3002, 3001]
@@ -713,7 +713,7 @@ def test_traceroutes_support_after_cursor_and_limit(client, db):
     _insert(db, trace_id=4001, from_id=0x01, to_id=0x02, first_seen_ts=NOW, ts=NOW)
     _insert(db, trace_id=4002, from_id=0x03, to_id=0x04, first_seen_ts=NOW - 10, ts=NOW - 10)
     _insert(db, trace_id=4003, from_id=0x05, to_id=0x06, first_seen_ts=NOW - 20, ts=NOW - 20)
-    resp = client.get("/traceroutes?after=%d&limit=2" % (NOW - 10))
+    resp = client.get("/api/traceroutes?after=%d&limit=2" % (NOW - 10))
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
@@ -728,7 +728,7 @@ def test_traceroutes_can_filter_by_from_and_to_nodes(client, db):
     _insert(
         db, trace_id=5003, from_id=0xCCCC0001, to_id=0xBBBB0001, first_seen_ts=NOW - 10, ts=NOW - 10
     )
-    resp = client.get("/traceroutes?from=!aaaa0001&to=!bbbb0001")
+    resp = client.get("/api/traceroutes?from=!aaaa0001&to=!bbbb0001")
     assert resp.status_code == 200
     data = resp.json()
     assert [t["trace_id"] for t in data] == [5001]
@@ -736,7 +736,7 @@ def test_traceroutes_can_filter_by_from_and_to_nodes(client, db):
 
 def test_traceroutes_invalid_from_node_returns_422(client, db):
     _insert(db)
-    resp = client.get("/traceroutes?from=not-a-node")
+    resp = client.get("/api/traceroutes?from=not-a-node")
     assert resp.status_code == 422
 
 

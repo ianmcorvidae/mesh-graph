@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+from starlette.staticfiles import StaticFiles
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
+from mesh_graph.db import get_nodes, get_traceroutes, parse_node_id
 from mesh_graph.graph.builder import (
     build_node_graph,
     build_simple_network_graph,
@@ -78,9 +81,18 @@ _NETWORK_GRAPH_QUERY_PARAMS = {
     "snr_labels",
     "include_unknown_nodes",
     "include_clients",
+    "clickable",
 }
-_TRACE_GRAPH_QUERY_PARAMS = {"format", "from", "to", "date", "direction", "communities"}
-_NODE_GRAPH_QUERY_PARAMS = {"format", "start", "end", "direction", "depth"}
+_TRACE_GRAPH_QUERY_PARAMS = {
+    "format",
+    "from",
+    "to",
+    "date",
+    "direction",
+    "communities",
+    "clickable",
+}
+_NODE_GRAPH_QUERY_PARAMS = {"format", "start", "end", "direction", "depth", "clickable"}
 
 
 def _parse_iso(value: Optional[str]) -> Optional[int]:
@@ -91,21 +103,6 @@ def _parse_iso(value: Optional[str]) -> Optional[int]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
-
-
-def _parse_node_id(node_id: str) -> int:
-    """Accept '!aabbccdd', 0x-prefixed hex, plain hex, or decimal."""
-    s = node_id.strip()
-    if s.startswith("!"):
-        return int(s[1:], 16)
-    if s.lower().startswith("0x"):
-        return int(s, 16)
-    if s.isdigit():
-        return int(s, 10)
-    try:
-        return int(s, 16)
-    except ValueError:
-        return int(s)
 
 
 def _parse_time_range(
@@ -137,6 +134,7 @@ def create_app(
     if observability_cfg and observability_cfg.enabled:
         instrument_fastapi(app)
     _cache = _GraphCache()
+    app.state.db = db
     app.state._graph_cache = _cache
 
     @app.get("/graph/network")
@@ -148,6 +146,7 @@ def create_app(
         snr_labels: bool = Query(default=False),
         include_unknown_nodes: bool = Query(default=False),
         include_clients: bool = Query(default=False),
+        clickable: bool = Query(default=False),
     ):
         with traced_span(
             "api.graph.network",
@@ -175,6 +174,7 @@ def create_app(
                 snr_labels=snr_labels,
                 include_unknown_nodes=include_unknown_nodes,
                 include_clients=include_clients,
+                clickable=clickable,
                 format=format,
                 layout="sfdp",
             )
@@ -192,6 +192,7 @@ def create_app(
                     include_snr_labels=snr_labels,
                     include_unknown_nodes=include_unknown_nodes,
                     include_clients=include_clients,
+                    clickable=clickable,
                 )
                 span.set_attribute("graph.node_count", len(G.nodes))
                 span.set_attribute("graph.edge_count", len(G.edges))
@@ -215,6 +216,7 @@ def create_app(
         date: Optional[str] = Query(default=None),
         direction: Literal["both", "out", "in"] = Query(default="both"),
         communities: str = Query(default="false"),
+        clickable: bool = Query(default=False),
     ):
         with traced_span(
             "api.graph.trace",
@@ -225,11 +227,11 @@ def create_app(
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             try:
-                from_id = _parse_node_id(from_node) if from_node is not None else None
+                from_id = parse_node_id(from_node) if from_node is not None else None
             except ValueError:
                 raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
             try:
-                to_id = _parse_node_id(to_node) if to_node is not None else None
+                to_id = parse_node_id(to_node) if to_node is not None else None
             except ValueError:
                 raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
             try:
@@ -269,6 +271,7 @@ def create_app(
                 approx_ts=approx_ts,
                 direction=direction,
                 resolution=resolution,
+                clickable=clickable,
                 format=format,
                 layout="dot",
                 max_ts=max_ts,
@@ -288,6 +291,7 @@ def create_app(
                     approx_ts=approx_ts,
                     direction=direction,
                     resolution=resolution,
+                    clickable=clickable,
                 )
                 if G is not None:
                     span.set_attribute("graph.node_count", len(G.nodes))
@@ -311,6 +315,7 @@ def create_app(
         end: Optional[str] = Query(default=None),
         direction: Literal["inbound", "outbound", "both", "network"] = Query(default="both"),
         depth: int = Query(default=1, ge=1, le=10),
+        clickable: bool = Query(default=False),
     ):
         with traced_span(
             "api.graph.node",
@@ -321,7 +326,7 @@ def create_app(
             if format not in _MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             try:
-                nid = _parse_node_id(node_id)
+                nid = parse_node_id(node_id)
             except ValueError:
                 raise HTTPException(status_code=422, detail=f"Invalid node_id: {node_id!r}")
             with traced_span("parse_time_range", warn_ms=50):
@@ -352,6 +357,7 @@ def create_app(
                     end_ts=end_ts,
                     direction=direction,
                     depth=depth,
+                    clickable=clickable,
                     format=format,
                     layout="dot",
                     max_ts=max_ts,
@@ -365,6 +371,7 @@ def create_app(
                     end_ts=end_ts,
                     direction=direction,
                     depth=depth,
+                    clickable=clickable,
                     format=format,
                     layout="dot",
                 )
@@ -384,6 +391,7 @@ def create_app(
                     end_ts=end_ts,
                     direction=direction,
                     depth=depth,
+                    clickable=clickable,
                 )
                 span.set_attribute("graph.node_count", len(G.nodes))
                 span.set_attribute("graph.edge_count", len(G.edges))
@@ -395,7 +403,7 @@ def create_app(
             _cache.set(ck, content, ttl=cache_ttl)
             return Response(content=content, media_type=_MEDIA_TYPES[format])
 
-    @app.get("/nodes", response_model=List[NodeOut])
+    @app.get("/api/nodes", response_model=List[NodeOut])
     def list_nodes(
         after: Optional[int] = Query(
             default=None, description="Return nodes seen at or before this UNIX timestamp"
@@ -404,17 +412,10 @@ def create_app(
             default=100, ge=1, le=500, description="Maximum number of rows to return"
         ),
     ):
-        cursor = int(time.time()) if after is None else after
-        rows = db.execute(
-            "SELECT nodenum, long_name, short_name, role, last_seen_ts FROM nodes "
-            "WHERE last_seen_ts <= ? "
-            "ORDER BY last_seen_ts DESC, nodenum DESC "
-            "LIMIT ?",
-            (cursor, limit),
-        ).fetchall()
+        rows, _next = get_nodes(db, cursor=after, limit=limit)
         return [dict(r) for r in rows]
 
-    @app.get("/traceroutes", response_model=List[TracerouteOut])
+    @app.get("/api/traceroutes", response_model=List[TracerouteOut])
     def list_traceroutes(
         after: Optional[int] = Query(
             default=None, description="Return traceroutes seen at or before this UNIX timestamp"
@@ -426,32 +427,23 @@ def create_app(
         to_node: Optional[str] = Query(default=None, alias="to"),
     ):
         try:
-            from_id = _parse_node_id(from_node) if from_node is not None else None
+            from_id = parse_node_id(from_node) if from_node is not None else None
         except ValueError:
             raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
         try:
-            to_id = _parse_node_id(to_node) if to_node is not None else None
+            to_id = parse_node_id(to_node) if to_node is not None else None
         except ValueError:
             raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
 
-        cursor = int(time.time()) if after is None else after
-        query = (
-            "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute "
-            "WHERE first_seen_ts <= ?"
-        )
-        params: list = [cursor]
-        if from_id is not None:
-            query += " AND from_id = ?"
-            params.append(from_id)
-        if to_id is not None:
-            query += " AND to_id = ?"
-            params.append(to_id)
-        query += " ORDER BY first_seen_ts DESC, trace_id DESC, from_id DESC, to_id DESC LIMIT ?"
-        params.append(limit)
-        rows = db.execute(
-            query,
-            params,
-        ).fetchall()
+        rows, _next = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
         return [dict(r) for r in rows]
+
+    _static = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(_static):
+        app.mount("/static", StaticFiles(directory=_static), name="static")
+
+    from mesh_graph.api.ui import router as ui_router
+
+    app.include_router(ui_router)
 
     return app

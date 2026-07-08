@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Network Graph{% endblock %}
+{% block content %}
+<div x-data="networkControls()">
+  <h1>Network Graph</h1>
+
+  <div class="controls">
+    <label>Start
+      <input type="datetime-local" x-model="start" @change="onChange()">
+    </label>
+    <label>End
+      <input type="datetime-local" x-model="end" @change="onChange()">
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="snrLabels" @change="onChange()">
+      SNR Labels
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="includeClients" @change="onChange()">
+      Include Clients
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="includeUnknown" @change="onChange()">
+      Include Unknown
+    </label>
+  </div>
+
+  <div class="graph-container" :class="{ loading: loading }">
+    <div x-show="loading" class="spinner"></div>
+    <object :data="graphUrl" type="image/svg+xml"
+            @load="loading = false" @error="loading = false"
+            x-show="!loading" x-cloak></object>
+  </div>
+</div>
+
+<style>[x-cloak] { display: none !important; }</style>
+<script>
+function networkControls() {
+  const p = new URLSearchParams(location.search);
+  return {
+    start: p.get('start') || '{{ default_start }}',
+    end: p.get('end') || '{{ default_end }}',
+    snrLabels: p.get('snr_labels') === 'true',
+    includeClients: p.get('include_clients') === 'true',
+    includeUnknown: p.get('include_unknown_nodes') === 'true',
+    loading: false,
+    get graphUrl() {
+      const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
+      if (this.start) q.set('start', this.start);
+      if (this.end) q.set('end', this.end);
+      if (this.snrLabels) q.set('snr_labels', 'true');
+      if (this.includeClients) q.set('include_clients', 'true');
+      if (this.includeUnknown) q.set('include_unknown_nodes', 'true');
+      return `/graph/network?${q}`;
+    },
+    onChange() {
+      this.loading = true;
+      const u = new URL(window.location);
+      const params = { start: this.start, end: this.end, snr_labels: this.snrLabels ? 'true' : '', include_clients: this.includeClients ? 'true' : '', include_unknown_nodes: this.includeUnknown ? 'true' : '' };
+      for (const [k, v] of Object.entries(params)) {
+        if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
+      }
+      history.pushState({}, '', u);
+    }
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Traceroute {{ trace_id }}{% endblock %}
+{% block content %}
+<div x-data="traceControls()">
+  <div class="detail-header">
+    <h1>Traceroute {{ trace_id }}</h1>
+    {% if trace_info %}
+    <span class="meta"><a href="/nodes/!{{ '%08x' % trace_info.from_id }}" class="node-id">!{{ '%08x' % trace_info.from_id }}</a> → <a href="/nodes/!{{ '%08x' % trace_info.to_id }}" class="node-id">!{{ '%08x' % trace_info.to_id }}</a></span>
+    <span class="meta">First seen: {{ trace_info.first_seen_ts }}</span>
+    {% endif %}
+  </div>
+
+  <div class="controls">
+    <label>Direction
+      <select x-model="direction" @change="onChange()">
+        <option value="both">Both</option>
+        <option value="out">Outbound</option>
+        <option value="in">Inbound (Reply)</option>
+      </select>
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="communities" @change="onChange()">
+      Communities
+    </label>
+  </div>
+
+  <div class="graph-container" :class="{ loading: loading }">
+    <div x-show="loading" class="spinner"></div>
+    <object :data="graphUrl" type="image/svg+xml"
+            @load="loading = false" @error="loading = false"
+            x-show="!loading" x-cloak></object>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Trace Links</h2>
+    <table>
+      <thead><tr><th>Link</th><th>SNR</th><th>Type</th><th>Timestamp</th></tr></thead>
+      <tbody>
+      {% for link in trace_links %}
+        <tr>
+          <td><span class="node-id">{{ link.link_start }}</span> → <span class="node-id">{{ link.link_end }}</span></td>
+          <td>{{ link.snr or '?' }} dB</td>
+          <td>{% if link.is_reply %}Reply{% else %}Probe{% endif %}{% if link.is_fast_path %} (fast){% endif %}</td>
+          <td>{{ link.ts }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No links found for this traceroute</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>[x-cloak] { display: none !important; }</style>
+<script>
+function traceControls() {
+  const p = new URLSearchParams(location.search);
+  const traceId = '{{ trace_id }}';
+  return {
+    direction: p.get('direction') || 'both',
+    communities: p.get('communities') === 'true',
+    loading: false,
+    get graphUrl() {
+      const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
+      q.set('direction', this.direction);
+      q.set('communities', this.communities ? 'true' : 'false');
+      return `/graph/trace/${traceId}?${q}`;
+    },
+    onChange() {
+      this.loading = true;
+      const u = new URL(window.location);
+      u.searchParams.set('direction', this.direction);
+      u.searchParams.set('communities', this.communities ? 'true' : 'false');
+      history.pushState({}, '', u);
+    }
+  }
+}
+</script>
+{% endblock %}

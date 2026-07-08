@@ -1,0 +1,24 @@
+<table>
+  <thead><tr><th>Node</th><th>Long Name</th><th>Short Name</th><th>Role</th><th>Last Seen</th></tr></thead>
+  <tbody>
+  {% for node in nodes %}
+    <tr>
+      <td><a href="/nodes/!{{ '%08x' % node.nodenum }}" class="node-id">!{{ '%08x' % node.nodenum }}</a></td>
+      <td>{{ node.long_name or '' }}</td>
+      <td>{{ node.short_name or '' }}</td>
+      <td><span class="role-badge">{{ node.role or 'CLIENT' }}</span></td>
+      <td>{{ node.last_seen_ts }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem;">No nodes found</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if next_cursor %}
+<div class="pagination">
+  <button hx-get="/nodes/partial?after={{ next_cursor }}&{% if query %}q={{ query }}&{% endif %}limit=100"
+          hx-target="#node-table" hx-push-url="true" hx-indicator="#search-spinner">
+    Next page
+  </button>
+</div>
+{% endif %}

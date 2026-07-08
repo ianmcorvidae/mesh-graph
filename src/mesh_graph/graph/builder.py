@@ -360,6 +360,18 @@ def _add_collapsed_edges(
             )
 
 
+def _set_clickable_nodes(G: nx.Graph) -> None:
+    for node in list(G.nodes):
+        s = str(node)
+        if s.startswith("!") and len(s) == 9:
+            try:
+                int(s[1:], 16)
+                G.nodes[node]["URL"] = f"/nodes/{s}"
+                G.nodes[node]["target"] = "_top"
+            except ValueError:
+                pass
+
+
 def build_simple_network_graph(
     conn: sqlite3.Connection,
     start_ts: Optional[int] = None,
@@ -367,6 +379,7 @@ def build_simple_network_graph(
     include_snr_labels: bool = True,
     include_unknown_nodes: bool = True,
     include_clients: bool = True,
+    clickable: bool = False,
 ) -> nx.DiGraph:
     with traced_span(
         "graph.build_simple_network_graph",
@@ -442,6 +455,8 @@ def build_simple_network_graph(
         nx.set_node_attributes(G, {n: {"style": "filled", "fillcolor": "#ffffff"} for n in G.nodes})
         span.set_attribute("graph.node_count", len(G.nodes))
         span.set_attribute("graph.edge_count", len(G.edges))
+        if clickable:
+            _set_clickable_nodes(G)
         return G
 
 
@@ -453,6 +468,7 @@ def build_trace_graph(
     approx_ts: Optional[int] = None,
     direction: Literal["both", "out", "in"] = "both",
     resolution: Optional[float] = None,
+    clickable: bool = False,
 ):
     trace = get_trace_for_selector(
         conn,
@@ -619,6 +635,8 @@ def build_trace_graph(
             community_labels[cid] = f"{hub_name} ({len(members)} nodes)"
         G.graph["community_labels"] = community_labels
 
+    if clickable:
+        _set_clickable_nodes(G)
     return G
 
 
@@ -629,6 +647,7 @@ def build_node_graph(
     end_ts: Optional[int] = None,
     direction: str = "both",
     depth: int = 1,
+    clickable: bool = False,
 ) -> nx.DiGraph:
     if direction not in {"inbound", "outbound", "both", "network"}:
         raise ValueError(f"Unsupported direction '{direction}'")
@@ -771,4 +790,6 @@ def build_node_graph(
         nx.set_node_attributes(
             G, {target: {"style": "filled", "fillcolor": "#ffffa9"} for target in target_nodes}
         )
+    if clickable:
+        _set_clickable_nodes(G)
     return G

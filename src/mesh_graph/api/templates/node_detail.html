@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Node !{{ '%08x' % node_id_int }}{% endblock %}
+{% block content %}
+<div x-data="nodeControls()">
+  <div class="detail-header">
+    <h1>Node <span class="node-id">!{{ '%08x' % node_id_int }}</span></h1>
+    {% if node_info %}
+    <span class="role-badge">{{ node_info.role or 'CLIENT' }}</span>
+    <span class="meta">{{ node_info.long_name or '' }}{% if node_info.short_name %} ({{ node_info.short_name }}){% endif %}</span>
+    <span class="meta">Last seen: {{ node_info.last_seen_ts }}</span>
+    {% endif %}
+  </div>
+
+  <div class="controls">
+    <label>Depth
+      <select x-model="depth" @change="onChange()">
+        {% for d in range(1, 11) %}
+        <option value="{{ d }}" {% if d == 1 %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Direction
+      <select x-model="direction" @change="onChange()">
+        <option value="both">Both</option>
+        <option value="outbound">Outbound</option>
+        <option value="inbound">Inbound</option>
+        <option value="network">Network</option>
+      </select>
+    </label>
+    <label>Start
+      <input type="datetime-local" x-model="start" @change="onChange()">
+    </label>
+    <label>End
+      <input type="datetime-local" x-model="end" @change="onChange()">
+    </label>
+  </div>
+
+  <div class="graph-container" :class="{ loading: loading }">
+    <div x-show="loading" class="spinner"></div>
+    <object :data="graphUrl" type="image/svg+xml"
+            @load="loading = false" @error="loading = false"
+            x-show="!loading" x-cloak></object>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Recent Traceroutes Involving This Node</h2>
+    <table>
+      <thead><tr><th>Trace ID</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
+      <tbody>
+      {% for trace in recent_traces %}
+        <tr>
+          <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
+          <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
+          <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
+          <td>{{ trace.first_seen_ts }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No traceroutes found for this node</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>[x-cloak] { display: none !important; }</style>
+<script>
+function nodeControls() {
+  const p = new URLSearchParams(location.search);
+  const nodeId = '{{ node_id }}';
+  return {
+    depth: p.get('depth') || '1',
+    direction: p.get('direction') || 'both',
+    start: p.get('start') || '{{ default_start }}',
+    end: p.get('end') || '{{ default_end }}',
+    loading: false,
+    get graphUrl() {
+      const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
+      q.set('depth', this.depth);
+      q.set('direction', this.direction);
+      if (this.start) q.set('start', this.start);
+      if (this.end) q.set('end', this.end);
+      return `/graph/node/${nodeId}?${q}`;
+    },
+    onChange() {
+      this.loading = true;
+      const u = new URL(window.location);
+      const params = { depth: this.depth, direction: this.direction, start: this.start, end: this.end };
+      for (const [k, v] of Object.entries(params)) {
+        if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
+      }
+      history.pushState({}, '', u);
+    }
+  }
+}
+</script>
+{% endblock %}

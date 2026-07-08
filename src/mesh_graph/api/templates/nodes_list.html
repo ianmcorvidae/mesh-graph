@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Nodes{% endblock %}
+{% block content %}
+<h1>Nodes</h1>
+
+<div class="search-box">
+  <input type="search" placeholder="Search by node ID or name..."
+         name="q" hx-get="/nodes/partial" hx-trigger="input changed delay:300ms"
+         hx-target="#node-table" hx-push-url="true" hx-indicator="#search-spinner"
+         {% if query %}value="{{ query }}"{% endif %}>
+  <span id="search-spinner" class="htmx-indicator spinner" style="position:static;display:none;margin:0 0 0 0.5rem;"></span>
+</div>
+
+<div id="node-table">
+  {% include "partials/node_table_rows.html" %}
+</div>
+{% endblock %}

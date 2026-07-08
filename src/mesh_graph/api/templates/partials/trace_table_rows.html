@@ -1,0 +1,23 @@
+<table>
+  <thead><tr><th>Trace ID</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
+  <tbody>
+  {% for trace in traceroutes %}
+    <tr>
+      <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
+      <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
+      <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
+      <td>{{ trace.first_seen_ts }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">No traceroutes found</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if next_cursor %}
+<div class="pagination">
+  <button hx-get="/traceroutes/partial?after={{ next_cursor }}&{% if from_id %}from={{ from_id }}&{% endif %}{% if to_id %}to={{ to_id }}&{% endif %}limit=100"
+          hx-target="#trace-table" hx-push-url="true" hx-indicator="#trace-spinner">
+    Next page
+  </button>
+</div>
+{% endif %}

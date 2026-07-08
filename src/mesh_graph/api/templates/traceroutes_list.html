@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Traceroutes{% endblock %}
+{% block content %}
+<h1>Traceroutes</h1>
+
+<div class="controls">
+  <label>From
+    <input type="search" placeholder="!aabbccdd" name="from"
+           hx-get="/traceroutes/partial" hx-trigger="input changed delay:300ms"
+           hx-target="#trace-table" hx-push-url="true" hx-indicator="#trace-spinner"
+           hx-include="[name='to']"
+           {% if from_id %}value="{{ from_id }}"{% endif %}>
+  </label>
+  <label>To
+    <input type="search" placeholder="!aabbccdd" name="to"
+           hx-get="/traceroutes/partial" hx-trigger="input changed delay:300ms"
+           hx-target="#trace-table" hx-push-url="true" hx-indicator="#trace-spinner"
+           hx-include="[name='from']"
+           {% if to_id %}value="{{ to_id }}"{% endif %}>
+  </label>
+  <span id="trace-spinner" class="htmx-indicator spinner" style="position:static;display:none;margin:0;"></span>
+</div>
+
+<div id="trace-table">
+  {% include "partials/trace_table_rows.html" %}
+</div>
+{% endblock %}

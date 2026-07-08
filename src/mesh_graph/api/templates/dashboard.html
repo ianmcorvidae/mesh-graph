@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}mesh-graph Dashboard{% endblock %}
+{% block content %}
+<div x-data="dashboardControls()">
+  <h1>Dashboard</h1>
+  <div class="stats">
+    <div class="stat-card">
+      <div class="value">{{ node_count }}</div>
+      <div class="label">Known Nodes</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ trace_count }}</div>
+      <div class="label">Traceroutes</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Network Graph (last 24h)</h2>
+    <div class="graph-container">
+      <div x-show="loading" class="spinner"></div>
+      <object :data="graphUrl" type="image/svg+xml"
+              @load="loading = false" @error="loading = false"
+              x-show="!loading" x-cloak></object>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Recent Nodes</h2>
+    <table>
+      <thead><tr><th>Node</th><th>Name</th><th>Role</th><th>Last Seen</th></tr></thead>
+      <tbody>
+      {% for node in recent_nodes %}
+        <tr>
+          <td><a href="/nodes/!{{ '%08x' % node.nodenum }}" class="node-id">!{{ '%08x' % node.nodenum }}</a></td>
+          <td>{{ node.long_name or node.short_name or '' }}</td>
+          <td><span class="role-badge">{{ node.role or 'CLIENT' }}</span></td>
+          <td>{{ node.last_seen_ts }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Recent Traceroutes</h2>
+    <table>
+      <thead><tr><th>Trace ID</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
+      <tbody>
+      {% for trace in recent_traces %}
+        <tr>
+          <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
+          <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
+          <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
+          <td>{{ trace.first_seen_ts }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>[x-cloak] { display: none !important; }</style>
+<script>
+function dashboardControls() {
+  return {
+    loading: false,
+    start: '{{ default_start }}',
+    end: '{{ default_end }}',
+    get graphUrl() {
+      return `/graph/network?format=svg&clickable=true&start=${encodeURIComponent(this.start)}&end=${encodeURIComponent(this.end)}`;
+    }
+  }
+}
+</script>
+{% endblock %}

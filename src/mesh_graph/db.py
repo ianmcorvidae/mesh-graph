@@ -147,6 +147,21 @@ def _node_id_str(nodenum: int) -> str:
     return f"!{nodenum:08x}"
 
 
+def parse_node_id(node_id: str) -> int:
+    """Accept '!aabbccdd', 0x-prefixed hex, plain hex, or decimal."""
+    s = node_id.strip()
+    if s.startswith("!"):
+        return int(s[1:], 16)
+    if s.lower().startswith("0x"):
+        return int(s, 16)
+    if s.isdigit():
+        return int(s, 10)
+    try:
+        return int(s, 16)
+    except ValueError:
+        return int(s)
+
+
 def _batched(iterable: list, n: int):
     """Yield successive n-sized chunks from iterable."""
     for i in range(0, len(iterable), n):
@@ -231,6 +246,121 @@ def get_node_attrs(
         span.set_attribute("db.attrs_count", len(attrs))
         span.set_attribute("db.label_mode", label_mode)
         return attrs
+
+
+def get_nodes(
+    conn: sqlite3.Connection,
+    cursor: Optional[int] = None,
+    limit: int = 100,
+    search: Optional[str] = None,
+) -> tuple[list[sqlite3.Row], Optional[int]]:
+    if cursor is None:
+        cursor = int(time.time())
+
+    if search:
+        search_clean = search.strip().lstrip("!").lower().replace("0x", "")
+        try:
+            node_num = int(search_clean, 16)
+            where = "(nodenum = ? OR long_name LIKE ? OR short_name LIKE ?)"
+            params: list = [node_num, f"%{search}%", f"%{search}%"]
+        except ValueError:
+            where = "(long_name LIKE ? OR short_name LIKE ?)"
+            params = [f"%{search}%", f"%{search}%"]
+
+        query = (
+            f"SELECT nodenum, long_name, short_name, role, last_seen_ts FROM nodes "
+            f"WHERE {where} "
+            f"ORDER BY last_seen_ts DESC, nodenum DESC LIMIT ?"
+        )
+        params.append(limit + 1)
+    else:
+        query = (
+            "SELECT nodenum, long_name, short_name, role, last_seen_ts FROM nodes "
+            "WHERE last_seen_ts <= ? "
+            "ORDER BY last_seen_ts DESC, nodenum DESC LIMIT ?"
+        )
+        params = [cursor, limit + 1]
+
+    rows = conn.execute(query, params).fetchall()
+    next_cursor: Optional[int] = None
+    if len(rows) > limit:
+        next_cursor = rows[limit - 1]["last_seen_ts"]
+        rows = rows[:limit]
+    return rows, next_cursor
+
+
+def get_traceroutes(
+    conn: sqlite3.Connection,
+    cursor: Optional[int] = None,
+    limit: int = 100,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+) -> tuple[list[sqlite3.Row], Optional[int]]:
+    if cursor is None:
+        cursor = int(time.time())
+
+    params: list = [cursor]
+    query = (
+        "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute WHERE first_seen_ts <= ?"
+    )
+    if from_id is not None:
+        query += " AND from_id = ?"
+        params.append(from_id)
+    if to_id is not None:
+        query += " AND to_id = ?"
+        params.append(to_id)
+    query += " ORDER BY first_seen_ts DESC, trace_id DESC, from_id DESC, to_id DESC LIMIT ?"
+    params.append(limit + 1)
+
+    rows = conn.execute(query, params).fetchall()
+    next_cursor: Optional[int] = None
+    if len(rows) > limit:
+        next_cursor = rows[limit - 1]["first_seen_ts"]
+        rows = rows[:limit]
+    return rows, next_cursor
+
+
+def get_node(conn: sqlite3.Connection, nodenum: int) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT nodenum, long_name, short_name, role, last_seen_ts FROM nodes WHERE nodenum = ?",
+        (nodenum,),
+    ).fetchone()
+
+
+def get_traceroutes_for_node(
+    conn: sqlite3.Connection, nodenum: int, limit: int = 20
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT DISTINCT t.trace_id, t.from_id, t.to_id, t.first_seen_ts "
+        "FROM traceroute t "
+        "JOIN traceroute_link tl ON t.trace_id = tl.trace_id "
+        "AND t.from_id = tl.from_id AND t.to_id = tl.to_id "
+        "WHERE tl.link_start = ? OR tl.link_end = ? "
+        "ORDER BY t.first_seen_ts DESC LIMIT ?",
+        (nodenum, nodenum, limit),
+    ).fetchall()
+
+
+def get_recent_nodes(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT nodenum, long_name, short_name, role, last_seen_ts FROM nodes "
+        "ORDER BY last_seen_ts DESC, nodenum DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def get_recent_traceroutes(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute "
+        "ORDER BY first_seen_ts DESC, trace_id DESC, from_id DESC, to_id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def get_dashboard_stats(conn: sqlite3.Connection) -> dict:
+    node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    trace_count = conn.execute("SELECT COUNT(*) FROM traceroute").fetchone()[0]
+    return {"node_count": node_count, "trace_count": trace_count}
 
 
 def _node_color(nodenum: int) -> str:
