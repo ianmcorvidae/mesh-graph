@@ -8,10 +8,9 @@ import networkx.algorithms.community as nxcom
 
 from mesh_graph.db import (
     get_links_for_network,
-    get_links_for_trace,
+    get_links_for_nodes,
     get_node_attrs,
     get_trace_for_selector,
-    get_uplinks_for_trace,
 )
 from mesh_graph.observability import traced_span
 
@@ -299,27 +298,32 @@ def _build_depth_map(
     depth: int,
     traversal: str,
 ) -> dict[object, int]:
-    node_depth: dict[object, int] = {node_id: 0}
-    frontier: set[object] = {node_id}
-    for current_depth in range(depth):
-        next_frontier: set[object] = set()
-        for current in frontier:
-            if traversal in {"outbound", "both"}:
-                for row in outgoing.get(current, []):
-                    neighbor = row["link_end"]
-                    if neighbor not in node_depth:
-                        node_depth[neighbor] = current_depth + 1
-                        next_frontier.add(neighbor)
-            if traversal in {"inbound", "both"}:
-                for row in incoming.get(current, []):
-                    neighbor = row["link_start"]
-                    if neighbor not in node_depth:
-                        node_depth[neighbor] = current_depth + 1
-                        next_frontier.add(neighbor)
-        frontier = next_frontier
-        if not frontier:
-            break
-    return node_depth
+    with traced_span(
+        "graph._build_depth_map",
+        warn_ms=100,
+        attributes={"graph.traversal": traversal, "graph.depth": depth},
+    ):
+        node_depth: dict[object, int] = {node_id: 0}
+        frontier: set[object] = {node_id}
+        for current_depth in range(depth):
+            next_frontier: set[object] = set()
+            for current in frontier:
+                if traversal in {"outbound", "both"}:
+                    for row in outgoing.get(current, []):
+                        neighbor = row["link_end"]
+                        if neighbor not in node_depth:
+                            node_depth[neighbor] = current_depth + 1
+                            next_frontier.add(neighbor)
+                if traversal in {"inbound", "both"}:
+                    for row in incoming.get(current, []):
+                        neighbor = row["link_start"]
+                        if neighbor not in node_depth:
+                            node_depth[neighbor] = current_depth + 1
+                            next_frontier.add(neighbor)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return node_depth
 
 
 def _add_collapsed_edges(
@@ -327,28 +331,33 @@ def _add_collapsed_edges(
     rows: list[sqlite3.Row],
     node_mapper,
 ) -> None:
-    edge_snrs: dict[tuple[str, str], list[float]] = {}
-    edge_colors: dict[tuple[str, str], str] = {}
-    for row in rows:
-        start_name = node_mapper(row["link_start"])
-        end_name = node_mapper(row["link_end"])
-        key = (start_name, end_name)
-        if key not in edge_snrs:
-            edge_snrs[key] = []
-        if row["snr"] is not None:
-            edge_snrs[key].append(float(row["snr"]))
-        if key not in edge_colors:
-            edge_colors[key] = _xor_link_color(row["link_start"], row["link_end"])
-    for (start_name, end_name), snrs in edge_snrs.items():
-        color = edge_colors[(start_name, end_name)]
-        G.add_edge(
-            start_name,
-            end_name,
-            color=color,
-            fontcolor=color,
-            style="solid",
-            label=_snr_range_label(snrs),
-        )
+    with traced_span(
+        "graph._add_collapsed_edges",
+        warn_ms=100,
+        attributes={"graph.input_rows": len(rows)},
+    ):
+        edge_snrs: dict[tuple[str, str], list[float]] = {}
+        edge_colors: dict[tuple[str, str], str] = {}
+        for row in rows:
+            start_name = node_mapper(row["link_start"])
+            end_name = node_mapper(row["link_end"])
+            key = (start_name, end_name)
+            if key not in edge_snrs:
+                edge_snrs[key] = []
+            if row["snr"] is not None:
+                edge_snrs[key].append(float(row["snr"]))
+            if key not in edge_colors:
+                edge_colors[key] = _xor_link_color(row["link_start"], row["link_end"])
+        for (start_name, end_name), snrs in edge_snrs.items():
+            color = edge_colors[(start_name, end_name)]
+            G.add_edge(
+                start_name,
+                end_name,
+                color=color,
+                fontcolor=color,
+                style="solid",
+                label=_snr_range_label(snrs),
+            )
 
 
 def build_simple_network_graph(
@@ -455,20 +464,19 @@ def build_trace_graph(
     if trace is None:
         return None
 
-    rows = get_links_for_trace(
-        conn,
-        trace_id=trace_id,
-        from_id=from_id,
-        to_id=to_id,
-        approx_ts=approx_ts,
-    )
-    uplink_rows = get_uplinks_for_trace(
-        conn,
-        trace_id=trace_id,
-        from_id=from_id,
-        to_id=to_id,
-        approx_ts=approx_ts,
-    )
+    rows = conn.execute(
+        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
+        "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
+        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
+        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
+    ).fetchall()
+    uplink_rows = conn.execute(
+        "SELECT * FROM traceroute_uplink "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ? "
+        "ORDER BY ts ASC, uplink_id ASC, is_reply ASC",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
+    ).fetchall()
 
     G = nx.MultiDiGraph()
     trace_from_id = trace["from_id"]
@@ -542,7 +550,18 @@ def build_trace_graph(
         if not G.has_node(n):
             G.add_node(n)
 
-    nx.set_node_attributes(G, get_node_attrs(conn))
+    _relevant_nodenums: set[int] = set()
+    for _row in rows:
+        if isinstance(_row["link_start"], int):
+            _relevant_nodenums.add(_row["link_start"])
+        if isinstance(_row["link_end"], int):
+            _relevant_nodenums.add(_row["link_end"])
+    for _row in filtered_uplink_rows:
+        if isinstance(_row["uplink_id"], int):
+            _relevant_nodenums.add(_row["uplink_id"])
+    _relevant_nodenums.add(trace_from_id)
+    _relevant_nodenums.add(trace_to_id)
+    nx.set_node_attributes(G, get_node_attrs(conn, relevant_nodenums=_relevant_nodenums))
     if uplink_node_labels:
         fallback_attrs: dict[str, dict[str, str]] = {}
         for node_name, lines in uplink_node_labels.items():
@@ -616,14 +635,61 @@ def build_node_graph(
     if depth < 1:
         raise ValueError("depth must be >= 1")
 
-    rows = get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts)
-    outgoing: dict[object, list[sqlite3.Row]] = {}
-    incoming: dict[object, list[sqlite3.Row]] = {}
-    for row in rows:
-        start = row["link_start"]
-        end = row["link_end"]
-        outgoing.setdefault(start, []).append(row)
-        incoming.setdefault(end, []).append(row)
+    # Iterative SQL BFS: collect only rows within depth hops of node_id
+    # instead of the original approach of loading ALL 2.8M rows.
+    all_rows: list[sqlite3.Row] = []
+    seen_nodes: set[int] = {node_id}
+    frontier: list[int] = [node_id]
+
+    if direction in ("both", "network"):
+        sql_direction = "both"
+    else:
+        sql_direction = direction
+
+    for _ in range(depth):
+        if not frontier:
+            break
+        new_rows = get_links_for_nodes(
+            conn,
+            frontier,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            direction=sql_direction,
+            exclude_string_nodes=True,
+        )
+        all_rows.extend(new_rows)
+        next_frontier: set[int] = set()
+        for row in new_rows:
+            for val in (row["link_start"], row["link_end"]):
+                if isinstance(val, int) and val not in seen_nodes:
+                    next_frontier.add(val)
+                    seen_nodes.add(val)
+        frontier = list(next_frontier)
+
+    # Deduplicate rows that may have been fetched at multiple depth levels
+    with traced_span("graph.node_graph.prepare", warn_ms=100):
+        seen_keys: set[tuple[int, int, int, object, object, bool]] = set()
+        rows: list[sqlite3.Row] = []
+        for row in all_rows:
+            key = (
+                row["trace_id"],
+                row["from_id"],
+                row["to_id"],
+                row["link_start"],
+                row["link_end"],
+                row["is_reply"],
+            )
+            if key not in seen_keys:
+                seen_keys.add(key)
+                rows.append(row)
+
+        outgoing: dict[object, list[sqlite3.Row]] = {}
+        incoming: dict[object, list[sqlite3.Row]] = {}
+        for row in rows:
+            start = row["link_start"]
+            end = row["link_end"]
+            outgoing.setdefault(start, []).append(row)
+            incoming.setdefault(end, []).append(row)
 
     G = nx.DiGraph()
 
@@ -643,56 +709,66 @@ def build_node_graph(
             selected.append(row)
         return selected
 
-    all_attrs = get_node_attrs(conn)
-    if direction == "both":
-        out_depth = _build_depth_map(
-            outgoing, incoming, node_id=node_id, depth=depth, traversal="outbound"
+    # Collect relevant nodenums to avoid the expensive DISTINCT stub query
+    relevant_nodenums: set[int] = {node_id}
+    for row in rows:
+        if isinstance(row["link_start"], int):
+            relevant_nodenums.add(row["link_start"])
+        if isinstance(row["link_end"], int):
+            relevant_nodenums.add(row["link_end"])
+    all_attrs = get_node_attrs(conn, relevant_nodenums=relevant_nodenums)
+
+    with traced_span("graph.node_graph.build_edges", warn_ms=200):
+        if direction == "both":
+            out_depth = _build_depth_map(
+                outgoing, incoming, node_id=node_id, depth=depth, traversal="outbound"
+            )
+            in_depth = _build_depth_map(
+                outgoing, incoming, node_id=node_id, depth=depth, traversal="inbound"
+            )
+            overlap = (set(out_depth.keys()) & set(in_depth.keys())) - {node_id}
+
+            def map_out(val) -> str:
+                base = _node_str(val)
+                return f"{base} [out]" if val in overlap else base
+
+            def map_in(val) -> str:
+                base = _node_str(val)
+                return f"{base} [in]" if val in overlap else base
+
+            _add_collapsed_edges(G, filter_rows_for(out_depth, "outbound"), map_out)
+            _add_collapsed_edges(G, filter_rows_for(in_depth, "inbound"), map_in)
+
+            extra_attrs: dict[str, dict] = {}
+            for n in G.nodes:
+                if n.endswith(" [out]"):
+                    base = n[:-6]
+                    attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
+                    attrs["label"] = f"{attrs.get('label', base)}"
+                    extra_attrs[n] = attrs
+                elif n.endswith(" [in]"):
+                    base = n[:-5]
+                    attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
+                    attrs["label"] = f"{attrs.get('label', base)}"
+                    extra_attrs[n] = attrs
+            if extra_attrs:
+                nx.set_node_attributes(G, extra_attrs)
+        else:
+            traversal = "both" if direction == "network" else direction
+            node_depth = _build_depth_map(
+                outgoing, incoming, node_id=node_id, depth=depth, traversal=traversal
+            )
+            mode = "both" if direction == "network" else direction
+            _add_collapsed_edges(G, filter_rows_for(node_depth, mode), _node_str)
+
+    with traced_span("graph.node_graph.finalize", warn_ms=50):
+        nx.set_node_attributes(G, all_attrs)
+        node_str = _node_str(node_id)
+        target_nodes = [node_str]
+        for target in target_nodes:
+            if not G.has_node(target):
+                G.add_node(target)
+        nx.set_node_attributes(
+            G, {target: {"style": "filled", "fillcolor": "#ffffa9"} for target in target_nodes}
         )
-        in_depth = _build_depth_map(
-            outgoing, incoming, node_id=node_id, depth=depth, traversal="inbound"
-        )
-        overlap = (set(out_depth.keys()) & set(in_depth.keys())) - {node_id}
-
-        def map_out(val) -> str:
-            base = _node_str(val)
-            return f"{base} [out]" if val in overlap else base
-
-        def map_in(val) -> str:
-            base = _node_str(val)
-            return f"{base} [in]" if val in overlap else base
-
-        _add_collapsed_edges(G, filter_rows_for(out_depth, "outbound"), map_out)
-        _add_collapsed_edges(G, filter_rows_for(in_depth, "inbound"), map_in)
-
-        extra_attrs: dict[str, dict] = {}
-        for n in G.nodes:
-            if n.endswith(" [out]"):
-                base = n[:-6]
-                attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
-                attrs["label"] = f"{attrs.get('label', base)}"
-                extra_attrs[n] = attrs
-            elif n.endswith(" [in]"):
-                base = n[:-5]
-                attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
-                attrs["label"] = f"{attrs.get('label', base)}"
-                extra_attrs[n] = attrs
-        if extra_attrs:
-            nx.set_node_attributes(G, extra_attrs)
-    else:
-        traversal = "both" if direction == "network" else direction
-        node_depth = _build_depth_map(
-            outgoing, incoming, node_id=node_id, depth=depth, traversal=traversal
-        )
-        mode = "both" if direction == "network" else direction
-        _add_collapsed_edges(G, filter_rows_for(node_depth, mode), _node_str)
-
-    nx.set_node_attributes(G, all_attrs)
-    node_str = _node_str(node_id)
-    target_nodes = [node_str]
-    for target in target_nodes:
-        if not G.has_node(target):
-            G.add_node(target)
-    nx.set_node_attributes(
-        G, {target: {"style": "filled", "fillcolor": "#ffffa9"} for target in target_nodes}
-    )
     return G

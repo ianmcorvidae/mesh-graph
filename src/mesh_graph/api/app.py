@@ -17,7 +17,7 @@ from mesh_graph.graph.builder import (
 from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
 
-_MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
+_MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "dot": "text/vnd.graphviz"}
 _NETWORK_GRAPH_QUERY_PARAMS = {
     "format",
     "start",

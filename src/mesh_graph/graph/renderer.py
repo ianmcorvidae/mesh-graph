@@ -5,7 +5,7 @@ import pydot
 
 from mesh_graph.observability import traced_span
 
-_SUPPORTED = {"png", "svg"}
+_SUPPORTED = {"png", "svg", "dot"}
 
 
 def _to_pydot(G: nx.Graph, *, layout_prog: str) -> pydot.Dot:
@@ -79,6 +79,9 @@ def render(G: nx.Graph, format: str, *, layout_prog: str = "dot") -> bytes:
         attributes={"graph.node_count": len(G.nodes), "graph.edge_count": len(G.edges)},
     ):
         pd = _to_pydot(G, layout_prog=layout_prog)
+
+    if fmt == "dot":
+        return pd.to_string().encode()
 
     with traced_span(
         f"renderer.graphviz.create_{fmt}", warn_ms=5000, attributes={"graphviz.prog": layout_prog}

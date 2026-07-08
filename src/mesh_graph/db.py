@@ -26,6 +26,7 @@ def init_db(conn: sqlite3.Connection) -> None:
                 PRIMARY KEY (from_id, trace_id, to_id)
             )
         """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traceroute_ts ON traceroute(first_seen_ts)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS traceroute_link (
                 trace_id     INTEGER NOT NULL,
@@ -43,6 +44,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         """)
         _ensure_column(conn, "traceroute_link", "route_len", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS traceroute_link_ts ON traceroute_link(ts)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traceroute_link_start ON traceroute_link(link_start)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traceroute_link_end ON traceroute_link(link_end)"
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS nodes (
                 nodenum      INTEGER PRIMARY KEY,
@@ -52,6 +59,9 @@ def init_db(conn: sqlite3.Connection) -> None:
                 last_seen_ts INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_lookup ON nodes(last_seen_ts DESC, nodenum DESC)"
+        )
         _migrate_traceroute_uplink(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS traceroute_uplink (
@@ -137,41 +147,85 @@ def _node_id_str(nodenum: int) -> str:
     return f"!{nodenum:08x}"
 
 
-def get_node_attrs(conn: sqlite3.Connection, label_mode: str = "full") -> dict:
+def _batched(iterable: list, n: int):
+    """Yield successive n-sized chunks from iterable."""
+    for i in range(0, len(iterable), n):
+        yield iterable[i : i + n]
+
+
+def get_node_attrs(
+    conn: sqlite3.Connection,
+    label_mode: str = "full",
+    relevant_nodenums: Optional[set[int]] = None,
+) -> dict:
     if label_mode not in {"full", "compact"}:
         raise ValueError(f"Unsupported label_mode '{label_mode}'")
 
     with traced_span("db.get_node_attrs", warn_ms=500) as span:
         attrs: dict = {}
         node_rows = 0
-        for row in conn.execute("SELECT nodenum, long_name, short_name, role FROM nodes"):
-            node_rows += 1
-            nodenum = row["nodenum"]
-            name = _node_id_str(nodenum)
-            label = name
-            if label_mode == "compact" and row["short_name"]:
-                label = f"{name}\n{row['short_name']}"
-            elif label_mode == "full" and row["long_name"]:
-                label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
-            color = _node_color(nodenum)
-            shape = _role_shape(row["role"])
-            entry = {"label": label, "color": color}
-            if shape:
-                entry["shape"] = shape
-            attrs[name] = entry
 
-        # Ensure every node that appears in links has at least a stub entry
-        stub_rows = 0
-        for row in conn.execute(
-            "SELECT DISTINCT link_start, link_end FROM traceroute_link "
-            "WHERE typeof(link_start)='integer' OR typeof(link_end)='integer'"
-        ):
-            stub_rows += 1
-            for val in (row["link_start"], row["link_end"]):
-                if isinstance(val, int):
-                    name = _node_id_str(val)
-                    if name not in attrs:
-                        attrs[name] = {"label": name, "color": _node_color(val)}
+        if relevant_nodenums is not None:
+            all_relevant: set[int] = set(relevant_nodenums)
+            for batch in _batched(list(all_relevant), 500):
+                placeholders = ",".join("?" * len(batch))
+                rows = conn.execute(
+                    f"SELECT nodenum, long_name, short_name, role FROM nodes "
+                    f"WHERE nodenum IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    node_rows += 1
+                    nodenum = row["nodenum"]
+                    name = _node_id_str(nodenum)
+                    label = name
+                    if label_mode == "compact" and row["short_name"]:
+                        label = f"{name}\n{row['short_name']}"
+                    elif label_mode == "full" and row["long_name"]:
+                        label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
+                    color = _node_color(nodenum)
+                    shape = _role_shape(row["role"])
+                    entry = {"label": label, "color": color}
+                    if shape:
+                        entry["shape"] = shape
+                    attrs[name] = entry
+
+            # Create stubs for any relevant nodenums not in the nodes table
+            known_nodenums = {int(k[1:], 16) for k in attrs if k.startswith("!")}
+            missing = all_relevant - known_nodenums
+            stub_rows = len(missing)
+            for nodenum in missing:
+                name = _node_id_str(nodenum)
+                attrs[name] = {"label": name, "color": _node_color(nodenum)}
+        else:
+            for row in conn.execute("SELECT nodenum, long_name, short_name, role FROM nodes"):
+                node_rows += 1
+                nodenum = row["nodenum"]
+                name = _node_id_str(nodenum)
+                label = name
+                if label_mode == "compact" and row["short_name"]:
+                    label = f"{name}\n{row['short_name']}"
+                elif label_mode == "full" and row["long_name"]:
+                    label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
+                color = _node_color(nodenum)
+                shape = _role_shape(row["role"])
+                entry = {"label": label, "color": color}
+                if shape:
+                    entry["shape"] = shape
+                attrs[name] = entry
+
+            # Ensure every node that appears in links has at least a stub entry
+            stub_rows = 0
+            for row in conn.execute(
+                "SELECT DISTINCT link_start, link_end FROM traceroute_link "
+                "WHERE typeof(link_start)='integer' OR typeof(link_end)='integer'"
+            ):
+                stub_rows += 1
+                for val in (row["link_start"], row["link_end"]):
+                    if isinstance(val, int):
+                        name = _node_id_str(val)
+                        if name not in attrs:
+                            attrs[name] = {"label": name, "color": _node_color(val)}
         span.set_attribute("db.nodes_rows", node_rows)
         span.set_attribute("db.stub_rows", stub_rows)
         span.set_attribute("db.attrs_count", len(attrs))
@@ -324,3 +378,46 @@ def get_links_for_node(
         query += " AND ts <= ?"
         params.append(end_ts)
     return conn.execute(query, params).fetchall()
+
+
+def get_links_for_nodes(
+    conn: sqlite3.Connection,
+    node_ids: list[int],
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    direction: str = "both",
+    exclude_string_nodes: bool = False,
+) -> list[sqlite3.Row]:
+    if not node_ids:
+        return []
+
+    with traced_span("db.get_links_for_nodes", warn_ms=500) as span:
+        all_rows: list[sqlite3.Row] = []
+        for batch in _batched(node_ids, 500):
+            placeholders = ",".join("?" * len(batch))
+            conditions: list[str] = []
+            params: list = []
+
+            if direction in ("outbound", "both"):
+                conditions.append(f"link_start IN ({placeholders})")
+                params.extend(batch)
+            if direction in ("inbound", "both"):
+                conditions.append(f"link_end IN ({placeholders})")
+                params.extend(batch)
+
+            query = f"SELECT * FROM traceroute_link WHERE ({' OR '.join(conditions)})"
+            if exclude_string_nodes:
+                query += " AND typeof(link_start) = 'integer' AND typeof(link_end) = 'integer'"
+            if start_ts is not None:
+                query += " AND ts >= ?"
+                params.append(start_ts)
+            if end_ts is not None:
+                query += " AND ts <= ?"
+                params.append(end_ts)
+
+            all_rows.extend(conn.execute(query, params).fetchall())
+
+        span.set_attribute("db.row_count", len(all_rows))
+        span.set_attribute("db.node_count", len(node_ids))
+        span.set_attribute("db.direction", direction)
+        return all_rows
