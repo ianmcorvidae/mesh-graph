@@ -747,6 +747,143 @@ def test_network_graph_invalid_time_returns_422(client, db):
 
 
 # ---------------------------------------------------------------------------
+# cache behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_cache_stores_and_hits_node_graph(client, db):
+    _insert(db)
+    resp1 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    assert resp1.status_code == 200
+    cache = client.app.state._graph_cache
+    assert len(cache) == 1
+    resp2 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    assert resp2.status_code == 200
+    assert resp2.content == resp1.content
+    assert len(cache) == 1  # no new entry on hit
+
+
+def test_cache_different_directions_different_keys(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    _insert(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=outbound")
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=inbound")
+    cache = client.app.state._graph_cache
+    assert len(cache) == 2
+
+
+def test_node_graph_depth1_cache_includes_max_ts(client, db):
+    _insert(db)
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    cache = client.app.state._graph_cache
+    # exactly one entry — its key must contain max_ts=
+    (key,) = cache._data.keys()
+    assert "max_ts=" in key
+
+
+def test_node_graph_depth2_key_omits_max_ts(client, db):
+    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    _insert(
+        db, trace_id=1, from_id=NODE_B, to_id=0xAAAA0003, link_start=NODE_B, link_end=0xAAAA0003
+    )
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg&depth=2")
+    cache = client.app.state._graph_cache
+    (key,) = cache._data.keys()
+    assert "max_ts=" not in key
+
+
+def test_trace_cache_busts_on_new_data(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    keys_before = set(client.app.state._graph_cache._data.keys())
+    # insert another link with a different PK + later ts
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_B,
+        link_end=0xAAAA0003,
+        ts=NOW + 100,
+    )
+    client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    keys_after = set(client.app.state._graph_cache._data.keys())
+    assert keys_after != keys_before
+
+
+def test_trace_cache_not_busted_by_unrelated_trace(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    resp1 = client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    resp2 = client.get(f"/graph/trace/{TRACE_1}?format=svg")
+    assert resp2.content == resp1.content
+
+
+def test_node_graph_depth1_cache_busts_on_new_link_for_same_node(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    keys_before = set(client.app.state._graph_cache._data.keys())
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=0xAAAA0003,
+        ts=NOW + 100,
+    )
+    client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    keys_after = set(client.app.state._graph_cache._data.keys())
+    assert keys_after != keys_before
+
+
+def test_node_graph_depth1_version_query_respects_window(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    resp1 = client.get(
+        f"/graph/node/!{NODE_A:08x}?format=svg&start={_iso(NOW - 100)}&end={_iso(NOW)}"
+    )
+    assert resp1.status_code == 200
+    # insert a link outside the window — MAX(ts) within window unchanged
+    _insert(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=0xAAAA0003,
+        ts=NOW + 100,
+    )
+    resp2 = client.get(
+        f"/graph/node/!{NODE_A:08x}?format=svg&start={_iso(NOW - 100)}&end={_iso(NOW)}"
+    )
+    assert resp2.content == resp1.content
+
+
+def test_node_graph_depth1_cache_not_busted_by_unrelated_node(client, db):
+    _insert(db, ts=NOW)
+    resp1 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    assert resp1.status_code == 200
+    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    resp2 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
+    assert resp2.content == resp1.content
+
+
+def test_network_graph_past_end_gets_long_ttl(client, db):
+    _insert(db)
+    client.get(f"/graph/network?format=svg&end={_iso(NOW + 1)}")
+    cache = client.app.state._graph_cache
+    (_, (expires_at, _)) = list(cache._data.items())[0]
+    ttl = expires_at - time.time()
+    assert ttl > 60  # should be using the 3600s branch
+
+
+def test_cache_does_not_store_404(client, db):
+    client.get("/graph/trace/9999")
+    cache = client.app.state._graph_cache
+    assert len(cache) == 0
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

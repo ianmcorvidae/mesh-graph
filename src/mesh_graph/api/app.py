@@ -17,6 +17,59 @@ from mesh_graph.graph.builder import (
 from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
 
+
+class _GraphCache:
+    """Simple TTL cache for rendered graph bytes.
+
+    Entries are keyed by a string that encodes all request parameters
+    plus (for trace & depth-1 node graphs) a data version token from
+    ``SELECT MAX(ts)``.  The TTL is therefore used only for eventual
+    eviction, not for correctness — a changed version token produces a
+    different key and forces a fresh render.
+    """
+
+    def __init__(self, maxsize: int = 1000):
+        self._maxsize = maxsize
+        self._data: dict[str, tuple[float, bytes]] = {}
+
+    def get(self, key: str) -> Optional[bytes]:
+        now = time.time()
+        entry = self._data.get(key)
+        if entry is None:
+            return None
+        expires_at, data = entry
+        if now >= expires_at:
+            del self._data[key]
+            return None
+        return data
+
+    def set(self, key: str, data: bytes, ttl: float) -> None:
+        self._data[key] = (time.time() + ttl, data)
+        if len(self._data) > self._maxsize:
+            self._evict()
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def clear(self) -> None:
+        self._data.clear()
+
+    def _evict(self) -> None:
+        now = time.time()
+        stale = [k for k, (exp, _) in self._data.items() if now >= exp]
+        for k in stale:
+            del self._data[k]
+        if len(self._data) > self._maxsize:
+            sorted_entries = sorted(self._data.keys(), key=lambda k: self._data[k][0])
+            for k in sorted_entries[: len(self._data) - self._maxsize]:
+                del self._data[k]
+
+
+def _cache_key(**parts) -> str:
+    """Deterministic cache-key string from keyword arguments."""
+    return "|".join(f"{k}={v}" for k, v in sorted(parts.items()))
+
+
 _MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "dot": "text/vnd.graphviz"}
 _NETWORK_GRAPH_QUERY_PARAMS = {
     "format",
@@ -83,6 +136,8 @@ def create_app(
     app = FastAPI(title="mesh-graph")
     if observability_cfg and observability_cfg.enabled:
         instrument_fastapi(app)
+    _cache = _GraphCache()
+    app.state._graph_cache = _cache
 
     @app.get("/graph/network")
     def graph_network(
@@ -109,6 +164,26 @@ def create_app(
                 raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
             with traced_span("parse_time_range", warn_ms=50):
                 start_ts, end_ts = _parse_time_range(start, end)
+
+            now_ts = int(time.time())
+            cache_ttl = 3600 if (end_ts is not None and end_ts <= now_ts) else 60
+
+            ck = _cache_key(
+                endpoint="network",
+                start_ts=start_ts,
+                end_ts=end_ts,
+                snr_labels=snr_labels,
+                include_unknown_nodes=include_unknown_nodes,
+                include_clients=include_clients,
+                format=format,
+                layout="sfdp",
+            )
+            with traced_span("cache.lookup", warn_ms=5) as span:
+                cached = _cache.get(ck)
+                span.set_attribute("cache.hit", cached is not None)
+            if cached is not None:
+                return Response(content=cached, media_type=_MEDIA_TYPES[format])
+
             with traced_span("graph.build_simple_network_graph", warn_ms=2000) as span:
                 G = build_simple_network_graph(
                     db,
@@ -127,6 +202,7 @@ def create_app(
             ) as span:
                 content = render(G, format, layout_prog="sfdp")
                 span.set_attribute("output.bytes", len(content))
+            _cache.set(ck, content, ttl=cache_ttl)
             return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/graph/trace/{trace_id}")
@@ -175,6 +251,34 @@ def create_app(
                         detail=f"Invalid communities value {communities!r}. Use 'true', 'false', or a number.",
                     )
 
+            with traced_span("cache.version_query", warn_ms=10):
+                row = db.execute(
+                    "SELECT MAX(ts) FROM traceroute_link WHERE trace_id = ?", (trace_id,)
+                ).fetchone()
+                _max_link = row[0] or 0
+                row = db.execute(
+                    "SELECT MAX(ts) FROM traceroute_uplink WHERE trace_id = ?", (trace_id,)
+                ).fetchone()
+                max_ts = max(_max_link, row[0] or 0)
+
+            ck = _cache_key(
+                endpoint="trace",
+                trace_id=trace_id,
+                from_id=from_id,
+                to_id=to_id,
+                approx_ts=approx_ts,
+                direction=direction,
+                resolution=resolution,
+                format=format,
+                layout="dot",
+                max_ts=max_ts,
+            )
+            with traced_span("cache.lookup", warn_ms=5) as span:
+                cached = _cache.get(ck)
+                span.set_attribute("cache.hit", cached is not None)
+            if cached is not None:
+                return Response(content=cached, media_type=_MEDIA_TYPES[format])
+
             with traced_span("graph.build_trace_graph", warn_ms=2000) as span:
                 G = build_trace_graph(
                     db,
@@ -195,6 +299,7 @@ def create_app(
             ) as span:
                 content = render(G, format, layout_prog="dot")
                 span.set_attribute("output.bytes", len(content))
+            _cache.set(ck, content, ttl=3600)
             return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/graph/node/{node_id}")
@@ -221,6 +326,56 @@ def create_app(
                 raise HTTPException(status_code=422, detail=f"Invalid node_id: {node_id!r}")
             with traced_span("parse_time_range", warn_ms=50):
                 start_ts, end_ts = _parse_time_range(start, end)
+
+            now_ts = int(time.time())
+            end_is_past = end_ts is not None and end_ts <= now_ts
+            use_version_key = depth == 1 or end_is_past
+
+            if use_version_key:
+                with traced_span("cache.version_query", warn_ms=10):
+                    _vq = (
+                        "SELECT MAX(ts) FROM traceroute_link WHERE (link_start = ? OR link_end = ?)"
+                    )
+                    _vp: list = [nid, nid]
+                    if start_ts is not None:
+                        _vq += " AND ts >= ?"
+                        _vp.append(start_ts)
+                    if end_ts is not None:
+                        _vq += " AND ts <= ?"
+                        _vp.append(end_ts)
+                    row = db.execute(_vq, _vp).fetchone()
+                    max_ts = row[0] or 0
+                ck = _cache_key(
+                    endpoint="node",
+                    nid=nid,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    direction=direction,
+                    depth=depth,
+                    format=format,
+                    layout="dot",
+                    max_ts=max_ts,
+                )
+                cache_ttl = 3600
+            else:
+                ck = _cache_key(
+                    endpoint="node",
+                    nid=nid,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    direction=direction,
+                    depth=depth,
+                    format=format,
+                    layout="dot",
+                )
+                cache_ttl = 60
+
+            with traced_span("cache.lookup", warn_ms=5) as span:
+                cached = _cache.get(ck)
+                span.set_attribute("cache.hit", cached is not None)
+            if cached is not None:
+                return Response(content=cached, media_type=_MEDIA_TYPES[format])
+
             with traced_span("graph.build_node_graph", warn_ms=2000) as span:
                 G = build_node_graph(
                     db,
@@ -237,6 +392,7 @@ def create_app(
             ) as span:
                 content = render(G, format, layout_prog="dot")
                 span.set_attribute("output.bytes", len(content))
+            _cache.set(ck, content, ttl=cache_ttl)
             return Response(content=content, media_type=_MEDIA_TYPES[format])
 
     @app.get("/nodes", response_model=List[NodeOut])
