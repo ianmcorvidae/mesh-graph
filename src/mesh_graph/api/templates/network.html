@@ -33,7 +33,6 @@
   </div>
 </div>
 
-<style>[x-cloak] { display: none !important; }</style>
 <script>
 function networkControls() {
   const p = new URLSearchParams(location.search);
@@ -46,7 +45,6 @@ function networkControls() {
     includeClients: p.get('include_clients') === 'true',
     includeUnknown: p.get('include_unknown_nodes') === 'true',
     loading: false,
-    _t: 0,
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('start', localToUtc(this.start));
@@ -54,7 +52,6 @@ function networkControls() {
       if (this.snrLabels) q.set('snr_labels', 'true');
       if (this.includeClients) q.set('include_clients', 'true');
       if (this.includeUnknown) q.set('include_unknown_nodes', 'true');
-      if (this._t) q.set('_t', this._t);
       return '/graph/network?' + q;
     },
     onTimeChange() {
@@ -80,7 +77,6 @@ function networkControls() {
       }
       history.pushState({}, '', u);
     },
-    forceRefresh() { this._t = Date.now(); this.loading = true; },
     init() {
       if (this.userSetTime) return;
       var self = this;
@@ -93,7 +89,7 @@ function networkControls() {
         if (self.start !== ns || self.end !== ne) {
           self.start = ns;
           self.end = ne;
-          self.forceRefresh();
+          self.loading = true;
         }
       }
       tick();

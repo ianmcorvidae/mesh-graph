@@ -37,6 +37,7 @@ class MQTTDataSource(DataSource):
         self.encryption_key = encryption_key
         self._client: Optional[mqtt.Client] = None
         self._db_path: Optional[str] = None
+        self._conn: Optional[sqlite3.Connection] = None
 
     # ------------------------------------------------------------------
     # DataSource interface
@@ -44,6 +45,7 @@ class MQTTDataSource(DataSource):
 
     def start(self, db_path: str) -> None:
         self._db_path = db_path
+        self._conn = get_connection(db_path)
 
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -62,6 +64,9 @@ class MQTTDataSource(DataSource):
         if self._client:
             self._client.loop_stop()
             self._client.disconnect()
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -78,11 +83,7 @@ class MQTTDataSource(DataSource):
         logger.warning("MQTT disconnected: %s", reason_code)
 
     def _on_message(self, client, userdata, msg):
-        conn = get_connection(self._db_path)
-        try:
-            self.handle_message(conn, msg.payload)
-        finally:
-            conn.close()
+        self.handle_message(self._conn, msg.payload)
 
     # ------------------------------------------------------------------
     # Packet processing (public for testing)

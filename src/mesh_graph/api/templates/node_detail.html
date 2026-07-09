@@ -62,7 +62,6 @@
   </div>
 </div>
 
-<style>[x-cloak] { display: none !important; }</style>
 <script>
 function nodeControls() {
   const p = new URLSearchParams(location.search);
@@ -75,14 +74,12 @@ function nodeControls() {
     end: hasTimeInUrl ? utcToLocal(p.get('end')) : utcToLocal('{{ default_end }}'),
     userSetTime: hasTimeInUrl,
     loading: false,
-    _t: 0,
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('depth', this.depth);
       q.set('direction', this.direction);
       q.set('start', localToUtc(this.start));
       q.set('end', localToUtc(this.end));
-      if (this._t) q.set('_t', this._t);
       return '/graph/node/' + nodeId + '?' + q;
     },
     onTimeChange() {
@@ -107,7 +104,6 @@ function nodeControls() {
       }
       history.pushState({}, '', u);
     },
-    forceRefresh() { this._t = Date.now(); this.loading = true; },
     init() {
       if (this.userSetTime) return;
       var self = this;
@@ -120,7 +116,7 @@ function nodeControls() {
         if (self.start !== ns || self.end !== ne) {
           self.start = ns;
           self.end = ne;
-          self.forceRefresh();
+          self.loading = true;
         }
       }
       tick();

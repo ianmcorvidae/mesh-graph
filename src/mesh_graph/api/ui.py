@@ -10,6 +10,7 @@ from starlette.templating import Jinja2Templates
 
 from mesh_graph.db import (
     get_dashboard_stats,
+    get_links_for_trace,
     get_node,
     get_nodes,
     get_recent_nodes,
@@ -18,6 +19,7 @@ from mesh_graph.db import (
     get_traceroutes_for_node,
     parse_node_id,
 )
+from mesh_graph.utils import node_id_format, node_id_str
 
 router = APIRouter()
 TEMPLATES = os.path.join(os.path.dirname(__file__), "templates")
@@ -31,20 +33,10 @@ def _default_time_bounds() -> tuple[str, str]:
     return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _node_id_str(nodenum: int) -> str:
-    return f"!{nodenum:08x}"
-
-
 def format_ts(ts: Optional[int]) -> str:
     if ts is None:
         return ""
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _fmt_node_id(val) -> str:
-    if isinstance(val, int):
-        return f"!{val:08x}"
-    return str(val)
 
 
 templates.env.filters["format_ts"] = format_ts
@@ -54,21 +46,11 @@ def _get_db(request: Request):
     return request.app.state.db
 
 
-def _get_trace_links(db, trace_id: int, from_id: Optional[int] = None, to_id: Optional[int] = None):
-    rows = db.execute(
-        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
-        "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
-        "WHERE tl.trace_id = ? AND (? IS NULL OR t.from_id = ?) AND (? IS NULL OR t.to_id = ?) "
-        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.link_start ASC LIMIT 500",
-        (trace_id, from_id, from_id, to_id, to_id),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
 def _enrich_trace_links(links: list[dict]) -> list[dict]:
     for link in links:
-        link["link_start_hex"] = _fmt_node_id(link["link_start"])
-        link["link_end_hex"] = _fmt_node_id(link["link_end"])
+        link["_id"] = f"{link['link_start']}:{link['link_end']}:{link['is_reply']}:{link['ts']}"
+        link["link_start_hex"] = node_id_format(link["link_start"])
+        link["link_end_hex"] = node_id_format(link["link_end"])
         link["link_start_is_id"] = isinstance(link["link_start"], int)
         link["link_end_is_id"] = isinstance(link["link_end"], int)
         link["direction"] = "In" if link["is_reply"] else "Out"
@@ -166,7 +148,7 @@ def node_detail(
         request,
         "node_detail.html",
         {
-            "node_id": _node_id_str(nid),
+            "node_id": node_id_str(nid),
             "node_id_int": nid,
             "node_info": dict(node_info) if node_info else None,
             "recent_traces": recent_traces,
@@ -185,8 +167,14 @@ def traceroutes_page(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     db = _get_db(request)
-    from_id = parse_node_id(from_node) if from_node else None
-    to_id = parse_node_id(to_node) if to_node else None
+    try:
+        from_id = parse_node_id(from_node) if from_node else None
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid from node: {from_node!r}")
+    try:
+        to_id = parse_node_id(to_node) if to_node else None
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid to node: {to_node!r}")
 
     rows, next_cursor = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
 
@@ -211,8 +199,14 @@ def traceroutes_partial(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     db = _get_db(request)
-    from_id = parse_node_id(from_node) if from_node else None
-    to_id = parse_node_id(to_node) if to_node else None
+    try:
+        from_id = parse_node_id(from_node) if from_node else None
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid from node: {from_node!r}")
+    try:
+        to_id = parse_node_id(to_node) if to_node else None
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid to node: {to_node!r}")
 
     rows, next_cursor = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
 
@@ -242,7 +236,9 @@ def traceroute_detail(
     if trace_info is None:
         raise HTTPException(status_code=404, detail=f"Traceroute {trace_id} not found")
 
-    trace_links = _enrich_trace_links(_get_trace_links(db, trace_id))
+    trace_links = _enrich_trace_links(
+        [dict(r) for r in get_links_for_trace(db, trace_id=trace_id, limit=500)]
+    )
 
     return templates.TemplateResponse(
         request,

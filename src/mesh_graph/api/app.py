@@ -134,6 +134,44 @@ def _reject_unknown_query_params(request: Request, allowed_params: set[str]) -> 
         )
 
 
+def _build_and_render(
+    db: sqlite3.Connection,
+    cache: _GraphCache,
+    build_fn,
+    cache_key: str,
+    cache_ttl: int,
+    format: str,
+    layout_prog: str,
+    span_name: str,
+    span_attributes: Optional[dict] = None,
+):
+    """Check cache, build graph, render, store, and return Response.
+
+    Returns ``Response`` on success.  Raises ``HTTPException(404)`` when the
+    build function returns ``None`` (e.g. trace not found).
+    """
+    with traced_span("cache.lookup", warn_ms=5) as span:
+        cached = cache.get(cache_key)
+        span.set_attribute("cache.hit", cached is not None)
+    if cached is not None:
+        return Response(content=cached, media_type=_MEDIA_TYPES[format])
+
+    with traced_span(span_name, warn_ms=2000) as span:
+        G = build_fn()
+        if G is not None:
+            span.set_attribute("graph.node_count", len(G.nodes))
+            span.set_attribute("graph.edge_count", len(G.edges))
+    if G is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    with traced_span(
+        "renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": layout_prog}
+    ) as span:
+        content = render(G, format, layout_prog=layout_prog)
+        span.set_attribute("output.bytes", len(content))
+    cache.set(cache_key, content, ttl=cache_ttl)
+    return Response(content=content, media_type=_MEDIA_TYPES[format])
+
+
 def create_app(
     db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None
 ) -> FastAPI:
@@ -190,14 +228,10 @@ def create_app(
                 format=format,
                 layout="sfdp",
             )
-            with traced_span("cache.lookup", warn_ms=5) as span:
-                cached = _cache.get(ck)
-                span.set_attribute("cache.hit", cached is not None)
-            if cached is not None:
-                return Response(content=cached, media_type=_MEDIA_TYPES[format])
-
-            with traced_span("graph.build_simple_network_graph", warn_ms=2000) as span:
-                G = build_simple_network_graph(
+            return _build_and_render(
+                db,
+                _cache,
+                lambda: build_simple_network_graph(
                     db,
                     start_ts=start_ts,
                     end_ts=end_ts,
@@ -205,18 +239,13 @@ def create_app(
                     include_unknown_nodes=include_unknown_nodes,
                     include_clients=include_clients,
                     clickable=clickable,
-                )
-                span.set_attribute("graph.node_count", len(G.nodes))
-                span.set_attribute("graph.edge_count", len(G.edges))
-            with traced_span(
-                "renderer.render",
-                warn_ms=5000,
-                attributes={"format": format, "layout_prog": "sfdp"},
-            ) as span:
-                content = render(G, format, layout_prog="sfdp")
-                span.set_attribute("output.bytes", len(content))
-            _cache.set(ck, content, ttl=cache_ttl)
-            return Response(content=content, media_type=_MEDIA_TYPES[format])
+                ),
+                ck,
+                cache_ttl,
+                format,
+                layout_prog="sfdp",
+                span_name="graph.build_simple_network_graph",
+            )
 
     @app.get("/graph/trace/{trace_id}")
     def graph_trace(
@@ -281,14 +310,10 @@ def create_app(
                 layout="dot",
                 max_ts=max_ts,
             )
-            with traced_span("cache.lookup", warn_ms=5) as span:
-                cached = _cache.get(ck)
-                span.set_attribute("cache.hit", cached is not None)
-            if cached is not None:
-                return Response(content=cached, media_type=_MEDIA_TYPES[format])
-
-            with traced_span("graph.build_trace_graph", warn_ms=2000) as span:
-                G = build_trace_graph(
+            return _build_and_render(
+                db,
+                _cache,
+                lambda: build_trace_graph(
                     db,
                     trace_id=trace_id,
                     from_id=from_id,
@@ -297,19 +322,13 @@ def create_app(
                     direction=direction,
                     resolution=resolution,
                     clickable=clickable,
-                )
-                if G is not None:
-                    span.set_attribute("graph.node_count", len(G.nodes))
-                    span.set_attribute("graph.edge_count", len(G.edges))
-            if G is None:
-                raise HTTPException(status_code=404, detail="Trace not found")
-            with traced_span(
-                "renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}
-            ) as span:
-                content = render(G, format, layout_prog="dot")
-                span.set_attribute("output.bytes", len(content))
-            _cache.set(ck, content, ttl=3600)
-            return Response(content=content, media_type=_MEDIA_TYPES[format])
+                ),
+                ck,
+                3600,
+                format,
+                layout_prog="dot",
+                span_name="graph.build_trace_graph",
+            )
 
     @app.get("/graph/node/{node_id}")
     def graph_node(
@@ -371,14 +390,10 @@ def create_app(
                 )
                 cache_ttl = 60
 
-            with traced_span("cache.lookup", warn_ms=5) as span:
-                cached = _cache.get(ck)
-                span.set_attribute("cache.hit", cached is not None)
-            if cached is not None:
-                return Response(content=cached, media_type=_MEDIA_TYPES[format])
-
-            with traced_span("graph.build_node_graph", warn_ms=2000) as span:
-                G = build_node_graph(
+            return _build_and_render(
+                db,
+                _cache,
+                lambda: build_node_graph(
                     db,
                     node_id=nid,
                     start_ts=start_ts,
@@ -386,16 +401,13 @@ def create_app(
                     direction=direction,
                     depth=depth,
                     clickable=clickable,
-                )
-                span.set_attribute("graph.node_count", len(G.nodes))
-                span.set_attribute("graph.edge_count", len(G.edges))
-            with traced_span(
-                "renderer.render", warn_ms=5000, attributes={"format": format, "layout_prog": "dot"}
-            ) as span:
-                content = render(G, format, layout_prog="dot")
-                span.set_attribute("output.bytes", len(content))
-            _cache.set(ck, content, ttl=cache_ttl)
-            return Response(content=content, media_type=_MEDIA_TYPES[format])
+                ),
+                ck,
+                cache_ttl,
+                format,
+                layout_prog="dot",
+                span_name="graph.build_node_graph",
+            )
 
     @app.get("/api/nodes", response_model=List[NodeOut])
     def list_nodes(

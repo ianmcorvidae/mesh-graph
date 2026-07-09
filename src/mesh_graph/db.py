@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 from mesh_graph.observability import traced_span
+from mesh_graph.utils import int_to_hex_color, node_id_str
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -143,10 +144,6 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: s
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
-def _node_id_str(nodenum: int) -> str:
-    return f"!{nodenum:08x}"
-
-
 def parse_node_id(node_id: str) -> int:
     """Accept '!aabbccdd', 0x-prefixed hex, plain hex, or decimal."""
     s = node_id.strip()
@@ -192,13 +189,13 @@ def get_node_attrs(
                 for row in rows:
                     node_rows += 1
                     nodenum = row["nodenum"]
-                    name = _node_id_str(nodenum)
+                    name = node_id_str(nodenum)
                     label = name
                     if label_mode == "compact" and row["short_name"]:
                         label = f"{name}\n{row['short_name']}"
                     elif label_mode == "full" and row["long_name"]:
                         label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
-                    color = _node_color(nodenum)
+                    color = int_to_hex_color(nodenum)
                     shape = _role_shape(row["role"])
                     entry = {"label": label, "color": color}
                     if shape:
@@ -210,19 +207,19 @@ def get_node_attrs(
             missing = all_relevant - known_nodenums
             stub_rows = len(missing)
             for nodenum in missing:
-                name = _node_id_str(nodenum)
-                attrs[name] = {"label": name, "color": _node_color(nodenum)}
+                name = node_id_str(nodenum)
+                attrs[name] = {"label": name, "color": int_to_hex_color(nodenum)}
         else:
             for row in conn.execute("SELECT nodenum, long_name, short_name, role FROM nodes"):
                 node_rows += 1
                 nodenum = row["nodenum"]
-                name = _node_id_str(nodenum)
+                name = node_id_str(nodenum)
                 label = name
                 if label_mode == "compact" and row["short_name"]:
                     label = f"{name}\n{row['short_name']}"
                 elif label_mode == "full" and row["long_name"]:
                     label = f"{name}\n{row['long_name']}\n{row['role'] or 'CLIENT'}"
-                color = _node_color(nodenum)
+                color = int_to_hex_color(nodenum)
                 shape = _role_shape(row["role"])
                 entry = {"label": label, "color": color}
                 if shape:
@@ -238,9 +235,9 @@ def get_node_attrs(
                 stub_rows += 1
                 for val in (row["link_start"], row["link_end"]):
                     if isinstance(val, int):
-                        name = _node_id_str(val)
+                        name = node_id_str(val)
                         if name not in attrs:
-                            attrs[name] = {"label": name, "color": _node_color(val)}
+                            attrs[name] = {"label": name, "color": int_to_hex_color(val)}
         span.set_attribute("db.nodes_rows", node_rows)
         span.set_attribute("db.stub_rows", stub_rows)
         span.set_attribute("db.attrs_count", len(attrs))
@@ -363,13 +360,6 @@ def get_dashboard_stats(conn: sqlite3.Connection) -> dict:
     return {"node_count": node_count, "trace_count": trace_count}
 
 
-def _node_color(nodenum: int) -> str:
-    r = (nodenum & 0xFF0000) >> 16
-    g = (nodenum & 0x00FF00) >> 8
-    b = nodenum & 0x0000FF
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
 def _role_shape(role: Optional[str]) -> Optional[str]:
     if role in ("ROUTER", "ROUTER_CLIENT", "ROUTER_LATE", "REPEATER"):
         return "diamond"
@@ -407,6 +397,7 @@ def get_links_for_trace(
     from_id: Optional[int] = None,
     to_id: Optional[int] = None,
     approx_ts: Optional[int] = None,
+    limit: Optional[int] = None,
 ) -> list[sqlite3.Row]:
     trace = _select_trace_candidate(
         conn,
@@ -417,13 +408,17 @@ def get_links_for_trace(
     )
     if trace is None:
         return []
-    return conn.execute(
+    query = (
         "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
         "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
         "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
-        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC",
-        (trace["trace_id"], trace["from_id"], trace["to_id"]),
-    ).fetchall()
+        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC"
+    )
+    params: list = [trace["trace_id"], trace["from_id"], trace["to_id"]]
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+    return conn.execute(query, params).fetchall()
 
 
 def get_trace_for_selector(

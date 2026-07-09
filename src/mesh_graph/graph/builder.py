@@ -9,27 +9,16 @@ import networkx.algorithms.community as nxcom
 from mesh_graph.db import (
     get_links_for_network,
     get_links_for_nodes,
+    get_links_for_trace,
     get_node_attrs,
     get_trace_for_selector,
+    get_uplinks_for_trace,
 )
 from mesh_graph.observability import traced_span
+from mesh_graph.utils import int_to_hex_color, node_id_format, node_id_str
 
 _OVERFLOW_ROUTE_LENGTHS = frozenset({8})
 _OVERFLOW_EDGE_COLOR = "#ee5500"
-
-
-def _node_str(val) -> str:
-    if isinstance(val, int):
-        return f"!{val:08x}"
-    return str(val)
-
-
-def _edge_color(trace_id) -> str:
-    n = int(trace_id) if not isinstance(trace_id, int) else trace_id
-    r = (n & 0xFF0000) >> 16
-    g = (n & 0x00FF00) >> 8
-    b = n & 0x0000FF
-    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _snr_color(snr: Optional[float]) -> str:
@@ -93,12 +82,12 @@ def _snr_weight(snr: Optional[float]) -> int:
 
 def _xor_link_color(link_start, link_end) -> str:
     if isinstance(link_start, int) and isinstance(link_end, int):
-        return _edge_color(link_start ^ link_end)
+        return int_to_hex_color(link_start ^ link_end)
     if isinstance(link_end, int):
-        return _edge_color(link_end)
+        return int_to_hex_color(link_end)
     if isinstance(link_start, int):
-        return _edge_color(link_start)
-    return _edge_color(0)
+        return int_to_hex_color(link_start)
+    return int_to_hex_color(0)
 
 
 def _uplink_labels(
@@ -127,8 +116,8 @@ def _uplink_labels(
     candidates_by_bucket: dict[tuple[int, bool, str], set[str]] = {}
     candidates_by_dir_uplink: dict[tuple[bool, str], set[str]] = {}
     for row in trace_rows:
-        edge_start = _node_str(row["link_start"])
-        edge_end = _node_str(row["link_end"])
+        edge_start = node_id_format(row["link_start"])
+        edge_end = node_id_format(row["link_end"])
         is_reply_edge = bool(row["is_reply"])
         trace_edge_keys.add((edge_start, edge_end, is_reply_edge))
         candidates_by_bucket.setdefault((int(row["ts"]), is_reply_edge, edge_end), set()).add(
@@ -142,8 +131,8 @@ def _uplink_labels(
     deferred_self_rows: list[tuple[tuple[int, bool, str], str]] = []
     node_buckets: dict[str, dict[str, list[str]]] = {}
     for row in uplink_rows:
-        uplink_name = _node_str(row["uplink_id"])
-        prev_name = _node_str(row["prev_node"])
+        uplink_name = node_id_format(row["uplink_id"])
+        prev_name = node_id_format(row["prev_node"])
         is_reply = bool(row["is_reply"])
         bucket = (int(row["ts"]), is_reply, uplink_name)
         rel_secs = int(row["ts"]) - base_ts
@@ -224,14 +213,14 @@ def _trace_node_style_attrs(
     outbound_nodes: set[str] = set()
     inbound_nodes: set[str] = set()
     for row in rows:
-        start = _node_str(row["link_start"])
-        end = _node_str(row["link_end"])
+        start = node_id_format(row["link_start"])
+        end = node_id_format(row["link_end"])
         if row["is_reply"]:
             inbound_nodes.update((start, end))
         else:
             outbound_nodes.update((start, end))
 
-    uplink_nodes = {_node_str(row["uplink_id"]) for row in uplink_rows}
+    uplink_nodes = {node_id_format(row["uplink_id"]) for row in uplink_rows}
     endpoint_nodes = {from_str, to_str}
     attrs: dict[str, dict[str, object]] = {}
     for node_name in outbound_nodes | inbound_nodes | endpoint_nodes | uplink_nodes:
@@ -284,7 +273,7 @@ def _fallback_fast_back_reply_edges(
         if not row["is_reply"]:
             continue
         # Fallback traces stored reply links from the trace destination outward.
-        edge = (_node_str(row["link_start"]), _node_str(row["link_end"]))
+        edge = (node_id_format(row["link_start"]), node_id_format(row["link_end"]))
         outgoing.setdefault(edge[0], []).append(edge)
     marked_stored, _ = _walk_single_outgoing_chain(destination_node, outgoing)
     # Reply links are rendered with inverted endpoints and dir=back.
@@ -427,8 +416,8 @@ def build_simple_network_graph(
             end = row["link_end"]
             if not (is_visible_node(start) and is_visible_node(end)):
                 continue
-            e0 = _node_str(start)
-            e1 = _node_str(end)
+            e0 = node_id_format(start)
+            e1 = node_id_format(end)
             key = (e0, e1)
             if key not in edge_snrs:
                 edge_snrs[key] = []
@@ -484,26 +473,25 @@ def build_trace_graph(
     if trace is None:
         return None
 
-    rows = conn.execute(
-        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
-        "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
-        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
-        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC",
-        (trace["trace_id"], trace["from_id"], trace["to_id"]),
-    ).fetchall()
-    uplink_rows = conn.execute(
-        "SELECT * FROM traceroute_uplink "
-        "WHERE trace_id = ? AND from_id = ? AND to_id = ? "
-        "ORDER BY ts ASC, uplink_id ASC, is_reply ASC",
-        (trace["trace_id"], trace["from_id"], trace["to_id"]),
-    ).fetchall()
+    rows = get_links_for_trace(
+        conn,
+        trace_id=trace["trace_id"],
+        from_id=trace["from_id"],
+        to_id=trace["to_id"],
+    )
+    uplink_rows = get_uplinks_for_trace(
+        conn,
+        trace_id=trace["trace_id"],
+        from_id=trace["from_id"],
+        to_id=trace["to_id"],
+    )
 
     G = nx.MultiDiGraph()
     trace_from_id = trace["from_id"]
     trace_to_id = trace["to_id"]
-    destination_node = _node_str(trace_to_id)
-    from_str = _node_str(trace_from_id)
-    to_str = _node_str(trace_to_id)
+    destination_node = node_id_format(trace_to_id)
+    from_str = node_id_format(trace_from_id)
+    to_str = node_id_format(trace_to_id)
     if direction == "out":
         filtered_uplink_rows = [row for row in uplink_rows if not row["is_reply"]]
     elif direction == "in":
@@ -522,7 +510,7 @@ def build_trace_graph(
         destination_node=to_str,
     )
     fast_back_edges = {
-        (_node_str(row["link_end"]), _node_str(row["link_start"]))
+        (node_id_format(row["link_end"]), node_id_format(row["link_start"]))
         for row in rows
         if row["is_reply"] and row["is_fast_path"]
     }
@@ -535,11 +523,11 @@ def build_trace_graph(
         if direction == "in" and not row["is_reply"]:
             continue
         if row["is_reply"]:
-            e0 = _node_str(row["link_end"])
-            e1 = _node_str(row["link_start"])
+            e0 = node_id_format(row["link_end"])
+            e1 = node_id_format(row["link_start"])
         else:
-            e0 = _node_str(row["link_start"])
-            e1 = _node_str(row["link_end"])
+            e0 = node_id_format(row["link_start"])
+            e1 = node_id_format(row["link_end"])
         overflow_cap = _overflow_route_cap(row["route_len"])
         color = _OVERFLOW_EDGE_COLOR if overflow_cap is not None else _snr_color(row["snr"])
         edge_is_fast_path = (
@@ -752,11 +740,11 @@ def build_node_graph(
             overlap = (set(out_depth.keys()) & set(in_depth.keys())) - {node_id}
 
             def map_out(val) -> str:
-                base = _node_str(val)
+                base = node_id_format(val)
                 return f"{base} [out]" if val in overlap else base
 
             def map_in(val) -> str:
-                base = _node_str(val)
+                base = node_id_format(val)
                 return f"{base} [in]" if val in overlap else base
 
             _add_collapsed_edges(G, filter_rows_for(out_depth, "outbound"), map_out)
@@ -766,12 +754,12 @@ def build_node_graph(
             for n in G.nodes:
                 if n.endswith(" [out]"):
                     base = n[:-6]
-                    attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
+                    attrs = dict(all_attrs.get(base, {"label": base, "color": int_to_hex_color(0)}))
                     attrs["label"] = f"{attrs.get('label', base)}"
                     extra_attrs[n] = attrs
                 elif n.endswith(" [in]"):
                     base = n[:-5]
-                    attrs = dict(all_attrs.get(base, {"label": base, "color": _edge_color(0)}))
+                    attrs = dict(all_attrs.get(base, {"label": base, "color": int_to_hex_color(0)}))
                     attrs["label"] = f"{attrs.get('label', base)}"
                     extra_attrs[n] = attrs
             if extra_attrs:
@@ -782,11 +770,11 @@ def build_node_graph(
                 outgoing, incoming, node_id=node_id, depth=depth, traversal=traversal
             )
             mode = "both" if direction == "network" else direction
-            _add_collapsed_edges(G, filter_rows_for(node_depth, mode), _node_str)
+            _add_collapsed_edges(G, filter_rows_for(node_depth, mode), node_id_str)
 
     with traced_span("graph.node_graph.finalize", warn_ms=50):
         nx.set_node_attributes(G, all_attrs)
-        node_str = _node_str(node_id)
+        node_str = node_id_format(node_id)
         target_nodes = [node_str]
         for target in target_nodes:
             if not G.has_node(target):

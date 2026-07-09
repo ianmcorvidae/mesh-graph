@@ -5,14 +5,15 @@ The app is configured to use an in-memory SQLite DB injected via app.state,
 populated with minimal fixture data per test.
 """
 
-import sqlite3
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from mesh_graph.api.app import create_app
-from mesh_graph.db import init_db, parse_node_id
+from mesh_graph.db import parse_node_id
+
+from .conftest import insert_link
 
 NOW = int(time.time())
 PAST = NOW - 7200
@@ -22,46 +23,9 @@ TRACE_1 = 1001
 
 
 @pytest.fixture
-def db():
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    return conn
-
-
-@pytest.fixture
 def client(db):
     app = create_app(db)
     return TestClient(app)
-
-
-def _insert(
-    db,
-    trace_id=TRACE_1,
-    from_id=NODE_A,
-    to_id=NODE_B,
-    link_start=None,
-    link_end=None,
-    ts=None,
-    first_seen_ts=None,
-    snr=5.0,
-    is_reply=0,
-):
-    link_start = link_start if link_start is not None else from_id
-    link_end = link_end if link_end is not None else to_id
-    ts = ts or NOW
-    first_seen_ts = first_seen_ts if first_seen_ts is not None else ts
-    with db:
-        db.execute(
-            "INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id, first_seen_ts) VALUES (?,?,?,?)",
-            (trace_id, from_id, to_id, first_seen_ts),
-        )
-        db.execute(
-            "INSERT OR IGNORE INTO traceroute_link "
-            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, 0),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +34,9 @@ def _insert(
 
 
 def test_network_graph_returns_svg_by_default(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/svg+xml"
@@ -78,7 +44,9 @@ def test_network_graph_returns_svg_by_default(client, db):
 
 
 def test_network_graph_returns_svg(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network?format=svg")
     assert resp.status_code == 200
     assert "svg" in resp.headers["content-type"]
@@ -86,8 +54,10 @@ def test_network_graph_returns_svg(client, db):
 
 
 def test_network_graph_time_range(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, ts=PAST)
-    _insert(
+    insert_link(
+        db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, ts=PAST
+    )
+    insert_link(
         db, trace_id=2, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, ts=NOW
     )
     resp = client.get(f"/graph/network?start={_iso(NOW - 60)}")
@@ -95,27 +65,33 @@ def test_network_graph_time_range(client, db):
 
 
 def test_network_graph_invalid_format(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network?format=gif")
     assert resp.status_code == 400
 
 
 def test_network_graph_unknown_query_param_returns_400(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network?since=123")
     assert resp.status_code == 400
     assert "since" in resp.json()["detail"]
 
 
 def test_network_graph_can_include_snr_labels(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=3.5)
+    insert_link(
+        db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=3.5
+    )
     resp = client.get("/graph/network?format=svg&snr_labels=true&include_clients=true")
     assert resp.status_code == 200
     assert b"3.5dB" in resp.content
 
 
 def test_network_graph_suppresses_unknown_nodes_by_default(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=1,
         from_id=NODE_A,
@@ -129,7 +105,7 @@ def test_network_graph_suppresses_unknown_nodes_by_default(client, db):
 
 
 def test_network_graph_can_include_unknown_nodes(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=1,
         from_id=NODE_A,
@@ -143,8 +119,12 @@ def test_network_graph_can_include_unknown_nodes(client, db):
 
 
 def test_network_graph_suppresses_snr_labels_by_default(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
-    _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
+    insert_link(
+        db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=2.0
+    )
+    insert_link(
+        db, trace_id=2, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=6.0
+    )
     resp = client.get("/graph/network?format=svg&include_clients=true")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
@@ -152,21 +132,27 @@ def test_network_graph_suppresses_snr_labels_by_default(client, db):
 
 
 def test_network_graph_can_include_snr_range_labels(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, snr=2.0)
-    _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, snr=6.0)
+    insert_link(
+        db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=2.0
+    )
+    insert_link(
+        db, trace_id=2, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=6.0
+    )
     resp = client.get("/graph/network?format=svg&snr_labels=true&include_clients=true")
     assert resp.status_code == 200
     assert b"2.0..6.0dB" in resp.content
 
 
 def test_network_graph_route_does_not_exist(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network/simple")
     assert resp.status_code == 404
 
 
 def test_network_graph_suppresses_unknown_nodes_by_default_on_collapsed_view(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=1,
         from_id=NODE_A,
@@ -180,7 +166,7 @@ def test_network_graph_suppresses_unknown_nodes_by_default_on_collapsed_view(cli
 
 
 def test_network_graph_can_include_unknown_nodes_on_collapsed_view(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=1,
         from_id=NODE_A,
@@ -203,7 +189,9 @@ def test_network_graph_uses_compact_labels(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (NODE_B, "Beta Long Name", "BETA", "ROUTER", NOW),
         )
-    _insert(db, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network")
     assert resp.status_code == 200
     assert f"!{NODE_A:08x}".encode() in resp.content
@@ -212,8 +200,12 @@ def test_network_graph_uses_compact_labels(client, db):
 
 
 def test_network_graph_time_range_collapsed_accepted(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, ts=PAST)
-    _insert(db, trace_id=2, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, ts=PAST
+    )
+    insert_link(
+        db, trace_id=2, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, ts=NOW
+    )
     resp = client.get(f"/graph/network?start={_iso(NOW - 60)}&include_clients=true")
     assert resp.status_code == 200
 
@@ -228,7 +220,9 @@ def test_network_graph_default_hides_client_only_paths(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (NODE_B, "B", "B", "CLIENT", NOW),
         )
-    _insert(db, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network")
     assert resp.status_code == 200
     assert f"!{NODE_A:08x}".encode() not in resp.content
@@ -249,8 +243,8 @@ def test_network_graph_default_does_not_infer_core_link_via_client(client, db):
             "INSERT INTO nodes (nodenum, long_name, short_name, role, last_seen_ts) VALUES (?,?,?,?,?)",
             (node_c, "C", "C", "CLIENT_BASE", NOW),
         )
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_A, link_end=NODE_B)
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_B, link_end=node_c)
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_A, link_end=NODE_B)
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=node_c, link_start=NODE_B, link_end=node_c)
     resp = client.get("/graph/network?format=svg")
     assert resp.status_code == 200
     assert f"!{NODE_A:08x}".encode() not in resp.content
@@ -263,14 +257,18 @@ def test_network_graph_default_does_not_infer_core_link_via_client(client, db):
 
 
 def test_trace_graph_returns_svg_by_default(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
 
 
 def test_trace_graph_returns_svg(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?format=svg")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
@@ -296,10 +294,26 @@ def test_trace_graph_renders_sparse_graph_when_trace_has_no_links(client, db):
 
 def test_trace_graph_defaults_to_most_recent_when_multiple_candidates(client, db):
     trace_id = 2001
-    _insert(
-        db, trace_id=trace_id, from_id=0x11111111, to_id=0x22222222, first_seen_ts=PAST, ts=PAST
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x11111111,
+        to_id=0x22222222,
+        link_start=0x11111111,
+        link_end=0x22222222,
+        first_seen_ts=PAST,
+        ts=PAST,
     )
-    _insert(db, trace_id=trace_id, from_id=0x33333333, to_id=0x44444444, first_seen_ts=NOW, ts=NOW)
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x33333333,
+        to_id=0x44444444,
+        link_start=0x33333333,
+        link_end=0x44444444,
+        first_seen_ts=NOW,
+        ts=NOW,
+    )
     resp = client.get(f"/graph/trace/{trace_id}?format=svg")
     assert resp.status_code == 200
     assert b"!33333333" in resp.content
@@ -309,10 +323,26 @@ def test_trace_graph_defaults_to_most_recent_when_multiple_candidates(client, db
 
 def test_trace_graph_can_filter_by_from_and_to(client, db):
     trace_id = 2002
-    _insert(
-        db, trace_id=trace_id, from_id=0x11111111, to_id=0x22222222, first_seen_ts=PAST, ts=PAST
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x11111111,
+        to_id=0x22222222,
+        link_start=0x11111111,
+        link_end=0x22222222,
+        first_seen_ts=PAST,
+        ts=PAST,
     )
-    _insert(db, trace_id=trace_id, from_id=0x33333333, to_id=0x44444444, first_seen_ts=NOW, ts=NOW)
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x33333333,
+        to_id=0x44444444,
+        link_start=0x33333333,
+        link_end=0x44444444,
+        first_seen_ts=NOW,
+        ts=NOW,
+    )
     resp = client.get(f"/graph/trace/{trace_id}?format=svg&from=!11111111&to=!22222222")
     assert resp.status_code == 200
     assert b"!11111111" in resp.content
@@ -322,10 +352,26 @@ def test_trace_graph_can_filter_by_from_and_to(client, db):
 
 def test_trace_graph_can_filter_by_approximate_date(client, db):
     trace_id = 2003
-    _insert(
-        db, trace_id=trace_id, from_id=0x11111111, to_id=0x22222222, first_seen_ts=PAST, ts=PAST
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x11111111,
+        to_id=0x22222222,
+        link_start=0x11111111,
+        link_end=0x22222222,
+        first_seen_ts=PAST,
+        ts=PAST,
     )
-    _insert(db, trace_id=trace_id, from_id=0x33333333, to_id=0x44444444, first_seen_ts=NOW, ts=NOW)
+    insert_link(
+        db,
+        trace_id=trace_id,
+        from_id=0x33333333,
+        to_id=0x44444444,
+        link_start=0x33333333,
+        link_end=0x44444444,
+        first_seen_ts=NOW,
+        ts=NOW,
+    )
     resp = client.get(f"/graph/trace/{trace_id}?format=svg&date={_iso(PAST + 1)}")
     assert resp.status_code == 200
     assert b"!11111111" in resp.content
@@ -334,26 +380,32 @@ def test_trace_graph_can_filter_by_approximate_date(client, db):
 
 
 def test_trace_graph_invalid_from_node_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?from=not-a-node")
     assert resp.status_code == 422
 
 
 def test_trace_graph_invalid_date_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?date=not-a-date")
     assert resp.status_code == 422
 
 
 def test_trace_graph_unknown_query_param_returns_400(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?start=2024-01-01T00:00:00Z")
     assert resp.status_code == 400
     assert "start" in resp.json()["detail"]
 
 
 def test_trace_graph_direction_out_shows_only_outbound_edges(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -363,7 +415,7 @@ def test_trace_graph_direction_out_shows_only_outbound_edges(client, db):
         snr=4.0,
         is_reply=0,
     )
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -380,7 +432,7 @@ def test_trace_graph_direction_out_shows_only_outbound_edges(client, db):
 
 
 def test_trace_graph_direction_in_shows_only_reply_edges(client, db):
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -390,7 +442,7 @@ def test_trace_graph_direction_in_shows_only_reply_edges(client, db):
         snr=4.0,
         is_reply=0,
     )
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -407,7 +459,9 @@ def test_trace_graph_direction_in_shows_only_reply_edges(client, db):
 
 
 def test_trace_graph_invalid_direction_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?direction=sideways")
     assert resp.status_code == 422
 
@@ -415,13 +469,13 @@ def test_trace_graph_invalid_direction_returns_422(client, db):
 def test_trace_graph_displays_uplink_times_on_edges(client, db):
     uplink_1 = 0xAAAA0099
     uplink_2 = 0xAAAA00AB
-    _insert(
+    insert_link(
         db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=uplink_1
     )
-    _insert(
+    insert_link(
         db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=uplink_1, link_end=uplink_2
     )
-    _insert(
+    insert_link(
         db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=uplink_2, link_end=NODE_B
     )
     with db:
@@ -446,8 +500,10 @@ def test_trace_graph_displays_uplink_times_on_edges(client, db):
 
 
 def test_trace_graph_communities_default_disabled(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_B,
@@ -462,15 +518,21 @@ def test_trace_graph_communities_default_disabled(client, db):
 
 def test_trace_graph_communities_enabled_true(client, db):
     node_c = 0xAAAA0003
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=node_c)
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=node_c, link_end=NODE_B)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=node_c
+    )
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=node_c, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=true")
     assert resp.status_code == 200
 
 
 def test_trace_graph_communities_with_custom_resolution(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_B,
@@ -483,8 +545,10 @@ def test_trace_graph_communities_with_custom_resolution(client, db):
 
 
 def test_trace_graph_communities_false_explicit(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_B,
@@ -498,14 +562,18 @@ def test_trace_graph_communities_false_explicit(client, db):
 
 
 def test_trace_graph_communities_zero_disabled(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?format=svg&communities=0")
     assert resp.status_code == 200
     assert b"cluster_" not in resp.content
 
 
 def test_trace_graph_communities_invalid_value_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/trace/{TRACE_1}?communities=not-a-number")
     assert resp.status_code == 422
     assert "Invalid communities value" in resp.json()["detail"]
@@ -517,24 +585,28 @@ def test_trace_graph_communities_invalid_value_returns_422(client, db):
 
 
 def test_node_graph_returns_svg_by_default(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
 
 
 def test_node_graph_returns_svg(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     assert resp.status_code == 200
     assert b"<svg" in resp.content
 
 
 def test_node_graph_collapses_links_with_snr_range(client, db):
-    _insert(
+    insert_link(
         db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=2.0
     )
-    _insert(
+    insert_link(
         db, trace_id=2, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B, snr=6.0
     )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=outbound")
@@ -543,13 +615,17 @@ def test_node_graph_collapses_links_with_snr_range(client, db):
 
 
 def test_node_graph_time_range_accepted(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?start={_iso(PAST)}&end={_iso(PAST + 7200)}")
     assert resp.status_code == 200
 
 
 def test_node_graph_invalid_time_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?start=not-a-date")
     assert resp.status_code == 422
 
@@ -560,7 +636,9 @@ def test_node_graph_invalid_node_id(client, db):
 
 
 def test_node_graph_unknown_query_params_return_400(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?since=123&to=foo")
     assert resp.status_code == 400
     detail = resp.json()["detail"]
@@ -569,8 +647,8 @@ def test_node_graph_unknown_query_params_return_400(client, db):
 
 
 def test_node_graph_accepts_direction_and_depth(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(
         db, trace_id=1, from_id=NODE_B, to_id=0xAAAA0003, link_start=NODE_B, link_end=0xAAAA0003
     )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=outbound&depth=2")
@@ -579,8 +657,8 @@ def test_node_graph_accepts_direction_and_depth(client, db):
 
 
 def test_node_graph_both_is_default_and_splits_overlap_nodes(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
     resp = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     assert resp.status_code == 200
     assert b"[out]" in resp.content
@@ -591,8 +669,8 @@ def test_node_graph_both_is_default_and_splits_overlap_nodes(client, db):
 
 
 def test_node_graph_network_direction_is_supported(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
     resp = client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=network")
     assert resp.status_code == 200
     assert b"[out]" not in resp.content
@@ -600,13 +678,17 @@ def test_node_graph_network_direction_is_supported(client, db):
 
 
 def test_node_graph_invalid_direction_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?direction=sideways")
     assert resp.status_code == 422
 
 
 def test_node_graph_invalid_depth_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get(f"/graph/node/!{NODE_A:08x}?depth=0")
     assert resp.status_code == 422
 
@@ -686,7 +768,9 @@ def test_nodes_support_after_cursor_and_limit(client, db):
 
 
 def test_traceroutes_returns_json_list(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/api/traceroutes")
     assert resp.status_code == 200
     data = resp.json()
@@ -701,8 +785,26 @@ def test_traceroutes_empty_list(client, db):
 
 
 def test_traceroutes_are_ordered_by_first_seen_desc(client, db):
-    _insert(db, trace_id=3001, from_id=0x01, to_id=0x02, first_seen_ts=PAST, ts=PAST)
-    _insert(db, trace_id=3002, from_id=0x03, to_id=0x04, first_seen_ts=NOW, ts=NOW)
+    insert_link(
+        db,
+        trace_id=3001,
+        from_id=0x01,
+        to_id=0x02,
+        link_start=0x01,
+        link_end=0x02,
+        first_seen_ts=PAST,
+        ts=PAST,
+    )
+    insert_link(
+        db,
+        trace_id=3002,
+        from_id=0x03,
+        to_id=0x04,
+        link_start=0x03,
+        link_end=0x04,
+        first_seen_ts=NOW,
+        ts=NOW,
+    )
     resp = client.get("/api/traceroutes?after=%d&limit=10" % NOW)
     assert resp.status_code == 200
     data = resp.json()
@@ -710,9 +812,36 @@ def test_traceroutes_are_ordered_by_first_seen_desc(client, db):
 
 
 def test_traceroutes_support_after_cursor_and_limit(client, db):
-    _insert(db, trace_id=4001, from_id=0x01, to_id=0x02, first_seen_ts=NOW, ts=NOW)
-    _insert(db, trace_id=4002, from_id=0x03, to_id=0x04, first_seen_ts=NOW - 10, ts=NOW - 10)
-    _insert(db, trace_id=4003, from_id=0x05, to_id=0x06, first_seen_ts=NOW - 20, ts=NOW - 20)
+    insert_link(
+        db,
+        trace_id=4001,
+        from_id=0x01,
+        to_id=0x02,
+        link_start=0x01,
+        link_end=0x02,
+        first_seen_ts=NOW,
+        ts=NOW,
+    )
+    insert_link(
+        db,
+        trace_id=4002,
+        from_id=0x03,
+        to_id=0x04,
+        link_start=0x03,
+        link_end=0x04,
+        first_seen_ts=NOW - 10,
+        ts=NOW - 10,
+    )
+    insert_link(
+        db,
+        trace_id=4003,
+        from_id=0x05,
+        to_id=0x06,
+        link_start=0x05,
+        link_end=0x06,
+        first_seen_ts=NOW - 20,
+        ts=NOW - 20,
+    )
     resp = client.get("/api/traceroutes?after=%d&limit=2" % (NOW - 10))
     assert resp.status_code == 200
     data = resp.json()
@@ -721,12 +850,35 @@ def test_traceroutes_support_after_cursor_and_limit(client, db):
 
 
 def test_traceroutes_can_filter_by_from_and_to_nodes(client, db):
-    _insert(db, trace_id=5001, from_id=0xAAAA0001, to_id=0xBBBB0001, first_seen_ts=NOW, ts=NOW)
-    _insert(
-        db, trace_id=5002, from_id=0xAAAA0001, to_id=0xBBBB0002, first_seen_ts=NOW - 5, ts=NOW - 5
+    insert_link(
+        db,
+        trace_id=5001,
+        from_id=0xAAAA0001,
+        to_id=0xBBBB0001,
+        link_start=0xAAAA0001,
+        link_end=0xBBBB0001,
+        first_seen_ts=NOW,
+        ts=NOW,
     )
-    _insert(
-        db, trace_id=5003, from_id=0xCCCC0001, to_id=0xBBBB0001, first_seen_ts=NOW - 10, ts=NOW - 10
+    insert_link(
+        db,
+        trace_id=5002,
+        from_id=0xAAAA0001,
+        to_id=0xBBBB0002,
+        link_start=0xAAAA0001,
+        link_end=0xBBBB0002,
+        first_seen_ts=NOW - 5,
+        ts=NOW - 5,
+    )
+    insert_link(
+        db,
+        trace_id=5003,
+        from_id=0xCCCC0001,
+        to_id=0xBBBB0001,
+        link_start=0xCCCC0001,
+        link_end=0xBBBB0001,
+        first_seen_ts=NOW - 10,
+        ts=NOW - 10,
     )
     resp = client.get("/api/traceroutes?from=!aaaa0001&to=!bbbb0001")
     assert resp.status_code == 200
@@ -735,13 +887,17 @@ def test_traceroutes_can_filter_by_from_and_to_nodes(client, db):
 
 
 def test_traceroutes_invalid_from_node_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/api/traceroutes?from=not-a-node")
     assert resp.status_code == 422
 
 
 def test_network_graph_invalid_time_returns_422(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp = client.get("/graph/network?start=not-a-date")
     assert resp.status_code == 422
 
@@ -752,7 +908,9 @@ def test_network_graph_invalid_time_returns_422(client, db):
 
 
 def test_cache_stores_and_hits_node_graph(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     resp1 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     assert resp1.status_code == 200
     cache = client.app.state._graph_cache
@@ -764,8 +922,8 @@ def test_cache_stores_and_hits_node_graph(client, db):
 
 
 def test_cache_different_directions_different_keys(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
     client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=outbound")
     client.get(f"/graph/node/!{NODE_A:08x}?format=svg&direction=inbound")
     cache = client.app.state._graph_cache
@@ -773,7 +931,9 @@ def test_cache_different_directions_different_keys(client, db):
 
 
 def test_node_graph_depth1_cache_includes_max_ts(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     cache = client.app.state._graph_cache
     # exactly one entry — its key must contain max_ts=
@@ -782,8 +942,8 @@ def test_node_graph_depth1_cache_includes_max_ts(client, db):
 
 
 def test_node_graph_depth2_key_omits_max_ts(client, db):
-    _insert(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
-    _insert(
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(
         db, trace_id=1, from_id=NODE_B, to_id=0xAAAA0003, link_start=NODE_B, link_end=0xAAAA0003
     )
     client.get(f"/graph/node/!{NODE_A:08x}?format=svg&depth=2")
@@ -793,11 +953,19 @@ def test_node_graph_depth2_key_omits_max_ts(client, db):
 
 
 def test_trace_cache_busts_on_new_data(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     client.get(f"/graph/trace/{TRACE_1}?format=svg")
     keys_before = set(client.app.state._graph_cache._data.keys())
     # insert another link with a different PK + later ts
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -812,18 +980,42 @@ def test_trace_cache_busts_on_new_data(client, db):
 
 
 def test_trace_cache_not_busted_by_unrelated_trace(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     resp1 = client.get(f"/graph/trace/{TRACE_1}?format=svg")
-    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    insert_link(
+        db,
+        trace_id=9999,
+        from_id=0xEEEEEEEE,
+        to_id=0xFFFFFFFF,
+        link_start=0xEEEEEEEE,
+        link_end=0xFFFFFFFF,
+        ts=NOW + 100,
+    )
     resp2 = client.get(f"/graph/trace/{TRACE_1}?format=svg")
     assert resp2.content == resp1.content
 
 
 def test_node_graph_depth1_cache_busts_on_new_link_for_same_node(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     keys_before = set(client.app.state._graph_cache._data.keys())
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -838,13 +1030,21 @@ def test_node_graph_depth1_cache_busts_on_new_link_for_same_node(client, db):
 
 
 def test_node_graph_depth1_version_query_respects_window(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     resp1 = client.get(
         f"/graph/node/!{NODE_A:08x}?format=svg&start={_iso(NOW - 100)}&end={_iso(NOW)}"
     )
     assert resp1.status_code == 200
     # insert a link outside the window — MAX(ts) within window unchanged
-    _insert(
+    insert_link(
         db,
         trace_id=TRACE_1,
         from_id=NODE_A,
@@ -860,16 +1060,34 @@ def test_node_graph_depth1_version_query_respects_window(client, db):
 
 
 def test_node_graph_depth1_cache_not_busted_by_unrelated_node(client, db):
-    _insert(db, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     resp1 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     assert resp1.status_code == 200
-    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    insert_link(
+        db,
+        trace_id=9999,
+        from_id=0xEEEEEEEE,
+        to_id=0xFFFFFFFF,
+        link_start=0xEEEEEEEE,
+        link_end=0xFFFFFFFF,
+        ts=NOW + 100,
+    )
     resp2 = client.get(f"/graph/node/!{NODE_A:08x}?format=svg")
     assert resp2.content == resp1.content
 
 
 def test_network_graph_past_end_gets_long_ttl(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     client.get(f"/graph/network?format=svg&end={_iso(NOW + 1)}")
     cache = client.app.state._graph_cache
     (_, (expires_at, _)) = list(cache._data.items())[0]
@@ -917,7 +1135,9 @@ def test_format_ts():
 
 
 def test_network_graph_cache_key_includes_max_ts(client, db):
-    _insert(db)
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
     client.get("/graph/network")
     cache = client.app.state._graph_cache
     (key,) = cache._data.keys()
@@ -926,30 +1146,112 @@ def test_network_graph_cache_key_includes_max_ts(client, db):
 
 
 def test_network_graph_cache_busts_on_new_data_in_window(client, db):
-    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     client.get("/graph/network")
     keys_before = set(client.app.state._graph_cache._data.keys())
-    _insert(db, trace_id=TRACE_1 + 1, from_id=NODE_A, to_id=NODE_B, ts=NOW + 100)
+    insert_link(
+        db,
+        trace_id=TRACE_1 + 1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW + 100,
+    )
     client.get("/graph/network")
     keys_after = set(client.app.state._graph_cache._data.keys())
     assert keys_after != keys_before
 
 
 def test_network_graph_cache_not_busted_by_out_of_window_data(client, db):
-    _insert(db, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     resp1 = client.get(f"/graph/network?start={_iso(NOW - 100)}&end={_iso(NOW)}")
     assert resp1.status_code == 200
-    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    insert_link(
+        db,
+        trace_id=9999,
+        from_id=0xEEEEEEEE,
+        to_id=0xFFFFFFFF,
+        link_start=0xEEEEEEEE,
+        link_end=0xFFFFFFFF,
+        ts=NOW + 100,
+    )
     resp2 = client.get(f"/graph/network?start={_iso(NOW - 100)}&end={_iso(NOW)}")
     assert resp2.status_code == 200
     assert resp2.content == resp1.content
 
 
 def test_network_graph_cache_shared_across_similar_windows(client, db):
-    _insert(db, ts=NOW)
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        ts=NOW,
+    )
     resp1 = client.get(f"/graph/network?start={_iso(NOW - 200)}&end={_iso(NOW)}")
     resp2 = client.get(f"/graph/network?start={_iso(NOW - 200)}&end={_iso(NOW + 1)}")
     assert resp2.content == resp1.content
+
+
+# ---------------------------------------------------------------------------
+# _build_and_render
+# ---------------------------------------------------------------------------
+
+
+def test_build_and_render_cache_hit_returns_cached_content(client, db):
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    resp1 = client.get("/graph/network")
+    assert resp1.status_code == 200
+    resp2 = client.get("/graph/network")
+    assert resp2.status_code == 200
+    assert resp2.content == resp1.content
+    assert len(client.app.state._graph_cache._data) == 1
+
+
+def test_build_and_render_none_build_returns_404(client, db):
+    resp = client.get("/graph/trace/9999")
+    assert resp.status_code == 404
+    assert len(client.app.state._graph_cache._data) == 0
+
+
+def test_build_and_render_stores_result_in_cache(client, db):
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    client.get(f"/graph/node/!{NODE_A:08x}")
+    cache = client.app.state._graph_cache
+    assert len(cache) == 1
+    (key,) = cache._data.keys()
+    assert "node" in key
+
+
+def test_build_and_render_different_keys_different_cache_entries(client, db):
+    insert_link(db, trace_id=1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B)
+    insert_link(db, trace_id=2, from_id=NODE_B, to_id=NODE_A, link_start=NODE_B, link_end=NODE_A)
+    client.get(f"/graph/node/!{NODE_A:08x}?direction=outbound")
+    client.get(f"/graph/node/!{NODE_A:08x}?direction=inbound")
+    assert len(client.app.state._graph_cache._data) == 2
 
 
 # ---------------------------------------------------------------------------

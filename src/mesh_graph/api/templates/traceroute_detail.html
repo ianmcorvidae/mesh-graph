@@ -49,7 +49,7 @@
         </tr>
       </thead>
       <tbody>
-        <template x-for="link in sortedLinks" :key="link.link_start + link.link_end + link.is_reply + link.ts">
+        <template x-for="link in sortedLinks" :key="link._id">
           <tr>
             <td>
               <template x-if="link.link_start_is_id">
@@ -81,7 +81,6 @@
   </div>
 </div>
 
-<style>[x-cloak] { display: none !important; }</style>
 <style>
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--accent); }
@@ -90,6 +89,8 @@
 function traceControls() {
   const p = new URLSearchParams(location.search);
   const traceId = '{{ trace_id }}';
+  const traceLinks = {{ trace_links | tojson }};
+  var sortedLinks = traceLinks.slice().sort(function(a, b) { return a.ts - b.ts; });
   return {
     direction: p.get('direction') || 'both',
     communities: p.get('communities') === 'true',
@@ -97,8 +98,8 @@ function traceControls() {
     fastPathOnly: false,
     sortKey: 'ts',
     sortDir: 'asc',
-    sortedLinks: [],
-    traceLinks: {{ trace_links | tojson }},
+    sortedLinks: sortedLinks,
+    traceLinks: traceLinks,
     sortBy(key) {
       if (this.sortKey === key) {
         this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';

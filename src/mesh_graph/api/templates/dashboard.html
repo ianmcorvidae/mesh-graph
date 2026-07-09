@@ -59,22 +59,18 @@
   </div>
 </div>
 
-<style>[x-cloak] { display: none !important; }</style>
 <script>
 function dashboardControls() {
   return {
     loading: false,
     start: '{{ default_start }}',
     end: '{{ default_end }}',
-    _t: 0,
     get graphUrl() {
       var q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('start', this.start);
       q.set('end', this.end);
-      if (this._t) q.set('_t', this._t);
       return '/graph/network?' + q;
     },
-    forceRefresh() { this._t = Date.now(); this.loading = true; },
     init() {
       var self = this;
       function tick() {
@@ -86,7 +82,7 @@ function dashboardControls() {
         if (self.start !== ns || self.end !== ne) {
           self.start = ns;
           self.end = ne;
-          self.forceRefresh();
+          self.loading = true;
         }
       }
       tick();

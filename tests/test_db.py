@@ -10,35 +10,11 @@ from mesh_graph.db import (
     upsert_node,
 )
 
+from .conftest import insert_link
+
 NOW = int(time.time())
 PAST = NOW - 7200
 FUTURE = NOW + 7200
-
-
-def _insert_link(
-    db,
-    trace_id,
-    from_id,
-    to_id,
-    link_start,
-    link_end,
-    snr=None,
-    is_reply=0,
-    is_fast_path=0,
-    ts=None,
-):
-    ts = ts or NOW
-    with db:
-        db.execute(
-            "INSERT OR IGNORE INTO traceroute (trace_id, from_id, to_id) VALUES (?,?,?)",
-            (trace_id, from_id, to_id),
-        )
-        db.execute(
-            "INSERT OR IGNORE INTO traceroute_link "
-            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path),
-        )
 
 
 # --- schema ---
@@ -121,7 +97,7 @@ def test_get_node_attrs_shape_client(db):
 
 
 def test_get_node_attrs_unknown_node_from_links(db):
-    _insert_link(db, 1001, 0xAAAA0001, 0xAAAA0002, 0xAAAA0001, 0xAAAA0002)
+    insert_link(db, 1001, 0xAAAA0001, 0xAAAA0002, 0xAAAA0001, 0xAAAA0002)
     attrs = get_node_attrs(db)
     assert "!aaaa0001" in attrs or "!aaaa0002" in attrs
 
@@ -130,23 +106,23 @@ def test_get_node_attrs_unknown_node_from_links(db):
 
 
 def test_get_links_for_network_all(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, snr=5.0)
-    _insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, snr=3.0)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, snr=5.0)
+    insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, snr=3.0)
     rows = get_links_for_network(db)
     assert len(rows) == 2
 
 
 def test_get_links_for_network_time_range(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
-    _insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, ts=NOW)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
+    insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, ts=NOW)
     rows = get_links_for_network(db, start_ts=NOW - 60)
     assert len(rows) == 1
     assert rows[0]["trace_id"] == 2
 
 
 def test_get_links_for_network_end_range(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
-    _insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, ts=NOW)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
+    insert_link(db, 2, 0x03, 0x04, 0x03, 0x04, ts=NOW)
     rows = get_links_for_network(db, end_ts=NOW - 60)
     assert len(rows) == 1
     assert rows[0]["trace_id"] == 1
@@ -156,15 +132,15 @@ def test_get_links_for_network_end_range(db):
 
 
 def test_get_links_for_trace(db):
-    _insert_link(db, 42, 0x01, 0x02, 0x01, 0x02)
-    _insert_link(db, 99, 0x03, 0x04, 0x03, 0x04)
+    insert_link(db, 42, 0x01, 0x02, 0x01, 0x02)
+    insert_link(db, 99, 0x03, 0x04, 0x03, 0x04)
     rows = get_links_for_trace(db, trace_id=42)
     assert len(rows) == 1
     assert rows[0]["trace_id"] == 42
 
 
 def test_get_links_for_trace_includes_traceroute_endpoints(db):
-    _insert_link(db, 77, 0xAA, 0xBB, 0xAA, 0xBB)
+    insert_link(db, 77, 0xAA, 0xBB, 0xAA, 0xBB)
     result = get_links_for_trace(db, trace_id=77)
     assert result[0]["from_id"] == 0xAA
     assert result[0]["to_id"] == 0xBB
@@ -324,21 +300,21 @@ def test_get_uplinks_for_trace_includes_hop_fields(db):
 
 
 def test_get_links_for_node_as_start(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02)
-    _insert_link(db, 2, 0x03, 0x04, 0x03, 0x04)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02)
+    insert_link(db, 2, 0x03, 0x04, 0x03, 0x04)
     rows = get_links_for_node(db, node_id=0x01)
     assert len(rows) == 1
 
 
 def test_get_links_for_node_as_end(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02)
     rows = get_links_for_node(db, node_id=0x02)
     assert len(rows) == 1
 
 
 def test_get_links_for_node_time_range(db):
-    _insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
-    _insert_link(db, 2, 0x01, 0x03, 0x01, 0x03, ts=NOW)
+    insert_link(db, 1, 0x01, 0x02, 0x01, 0x02, ts=PAST)
+    insert_link(db, 2, 0x01, 0x03, 0x01, 0x03, ts=NOW)
     rows = get_links_for_node(db, node_id=0x01, start_ts=NOW - 60)
     assert len(rows) == 1
     assert rows[0]["trace_id"] == 2
