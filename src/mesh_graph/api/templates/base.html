@@ -19,5 +19,36 @@
 <main>
 {% block content %}{% endblock %}
 </main>
+<script>
+function formatTimestamps() {
+  document.querySelectorAll('.ts-utc').forEach(function(el) {
+    var iso = el.getAttribute('datetime');
+    if (!iso) return;
+    var d = new Date(iso);
+    if (!isNaN(d)) el.textContent = d.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+    });
+  });
+}
+function formatLocal(iso) {
+  var d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+  });
+}
+function utcToLocal(iso) {
+  var d = new Date(iso.replace('Z','') + 'Z');
+  var pad = function(n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function localToUtc(str) {
+  if (!str) return '';
+  return new Date(str).toISOString().slice(0, 19) + 'Z';
+}
+document.addEventListener('DOMContentLoaded', formatTimestamps);
+document.addEventListener('htmx:afterSwap', formatTimestamps);
+</script>
 </body>
 </html>

@@ -15,7 +15,7 @@
   </div>
 
   <div class="section">
-    <h2 class="section-title">Network Graph (last 24h)</h2>
+    <h2 class="section-title">Network Graph (last 24h as of <time :datetime="end" x-text="formatLocal(end)"></time>)</h2>
     <div class="graph-container">
       <div x-show="loading" class="spinner"></div>
       <object :data="graphUrl" type="image/svg+xml"
@@ -34,7 +34,7 @@
           <td><a href="/nodes/!{{ '%08x' % node.nodenum }}" class="node-id">!{{ '%08x' % node.nodenum }}</a></td>
           <td>{{ node.long_name or node.short_name or '' }}</td>
           <td><span class="role-badge">{{ node.role or 'CLIENT' }}</span></td>
-          <td>{{ node.last_seen_ts }}</td>
+           <td><time class="ts-utc" datetime="{{ node.last_seen_ts | format_ts }}">{{ node.last_seen_ts | format_ts }}</time></td>
         </tr>
       {% endfor %}
       </tbody>
@@ -51,7 +51,7 @@
           <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
           <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
           <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
-          <td>{{ trace.first_seen_ts }}</td>
+           <td><time class="ts-utc" datetime="{{ trace.first_seen_ts | format_ts }}">{{ trace.first_seen_ts | format_ts }}</time></td>
         </tr>
       {% endfor %}
       </tbody>
@@ -66,8 +66,32 @@ function dashboardControls() {
     loading: false,
     start: '{{ default_start }}',
     end: '{{ default_end }}',
+    _t: 0,
     get graphUrl() {
-      return `/graph/network?format=svg&clickable=true&start=${encodeURIComponent(this.start)}&end=${encodeURIComponent(this.end)}`;
+      var q = new URLSearchParams({ format: 'svg', clickable: 'true' });
+      q.set('start', this.start);
+      q.set('end', this.end);
+      if (this._t) q.set('_t', this._t);
+      return '/graph/network?' + q;
+    },
+    forceRefresh() { this._t = Date.now(); this.loading = true; },
+    init() {
+      var self = this;
+      function tick() {
+        var now = new Date();
+        var end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0));
+        var start = new Date(end.getTime() - 86400000);
+        var ns = start.toISOString().slice(0, 19) + 'Z';
+        var ne = end.toISOString().slice(0, 19) + 'Z';
+        if (self.start !== ns || self.end !== ne) {
+          self.start = ns;
+          self.end = ne;
+          self.forceRefresh();
+        }
+      }
+      tick();
+      setInterval(tick, 60000);
+      document.addEventListener('visibilitychange', function() { if (!document.hidden) tick(); });
     }
   }
 }

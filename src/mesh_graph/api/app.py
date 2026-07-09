@@ -11,7 +11,14 @@ from starlette.staticfiles import StaticFiles
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
-from mesh_graph.db import get_nodes, get_traceroutes, parse_node_id
+from mesh_graph.db import (
+    get_max_link_ts,
+    get_max_link_ts_for_node,
+    get_max_ts_for_trace,
+    get_nodes,
+    get_traceroutes,
+    parse_node_id,
+)
 from mesh_graph.graph.builder import (
     build_node_graph,
     build_simple_network_graph,
@@ -165,12 +172,17 @@ def create_app(
                 start_ts, end_ts = _parse_time_range(start, end)
 
             now_ts = int(time.time())
-            cache_ttl = 3600 if (end_ts is not None and end_ts <= now_ts) else 60
+            end_is_past = end_ts is not None and end_ts <= now_ts
+            cache_ttl = 3600 if end_is_past else 60
+
+            with traced_span("cache.version_query", warn_ms=10):
+                max_ts = get_max_link_ts(db, start_ts=start_ts, end_ts=end_ts)
 
             ck = _cache_key(
                 endpoint="network",
                 start_ts=start_ts,
-                end_ts=end_ts,
+                end_is_past=end_is_past,
+                max_ts=max_ts,
                 snr_labels=snr_labels,
                 include_unknown_nodes=include_unknown_nodes,
                 include_clients=include_clients,
@@ -254,14 +266,7 @@ def create_app(
                     )
 
             with traced_span("cache.version_query", warn_ms=10):
-                row = db.execute(
-                    "SELECT MAX(ts) FROM traceroute_link WHERE trace_id = ?", (trace_id,)
-                ).fetchone()
-                _max_link = row[0] or 0
-                row = db.execute(
-                    "SELECT MAX(ts) FROM traceroute_uplink WHERE trace_id = ?", (trace_id,)
-                ).fetchone()
-                max_ts = max(_max_link, row[0] or 0)
+                max_ts = get_max_ts_for_trace(db, trace_id)
 
             ck = _cache_key(
                 endpoint="trace",
@@ -338,23 +343,12 @@ def create_app(
 
             if use_version_key:
                 with traced_span("cache.version_query", warn_ms=10):
-                    _vq = (
-                        "SELECT MAX(ts) FROM traceroute_link WHERE (link_start = ? OR link_end = ?)"
-                    )
-                    _vp: list = [nid, nid]
-                    if start_ts is not None:
-                        _vq += " AND ts >= ?"
-                        _vp.append(start_ts)
-                    if end_ts is not None:
-                        _vq += " AND ts <= ?"
-                        _vp.append(end_ts)
-                    row = db.execute(_vq, _vp).fetchone()
-                    max_ts = row[0] or 0
+                    max_ts = get_max_link_ts_for_node(db, nid, start_ts=start_ts, end_ts=end_ts)
                 ck = _cache_key(
                     endpoint="node",
                     nid=nid,
                     start_ts=start_ts,
-                    end_ts=end_ts,
+                    end_is_past=end_is_past,
                     direction=direction,
                     depth=depth,
                     clickable=clickable,

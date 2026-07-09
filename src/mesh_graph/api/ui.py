@@ -26,12 +26,28 @@ templates = Jinja2Templates(directory=TEMPLATES)
 
 def _default_time_bounds() -> tuple[str, str]:
     now = datetime.now(timezone.utc)
-    day_ago = now - timedelta(days=1)
-    return day_ago.strftime("%Y-%m-%dT%H:%M:%SZ"), now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = now.replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=1)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _node_id_str(nodenum: int) -> str:
     return f"!{nodenum:08x}"
+
+
+def format_ts(ts: Optional[int]) -> str:
+    if ts is None:
+        return ""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fmt_node_id(val) -> str:
+    if isinstance(val, int):
+        return f"!{val:08x}"
+    return str(val)
+
+
+templates.env.filters["format_ts"] = format_ts
 
 
 def _get_db(request: Request):
@@ -47,6 +63,17 @@ def _get_trace_links(db, trace_id: int, from_id: Optional[int] = None, to_id: Op
         (trace_id, from_id, from_id, to_id, to_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _enrich_trace_links(links: list[dict]) -> list[dict]:
+    for link in links:
+        link["link_start_hex"] = _fmt_node_id(link["link_start"])
+        link["link_end_hex"] = _fmt_node_id(link["link_end"])
+        link["link_start_is_id"] = isinstance(link["link_start"], int)
+        link["link_end_is_id"] = isinstance(link["link_end"], int)
+        link["direction"] = "In" if link["is_reply"] else "Out"
+        link["ts_iso"] = format_ts(link["ts"])
+    return links
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -215,7 +242,7 @@ def traceroute_detail(
     if trace_info is None:
         raise HTTPException(status_code=404, detail=f"Traceroute {trace_id} not found")
 
-    trace_links = _get_trace_links(db, trace_id)
+    trace_links = _enrich_trace_links(_get_trace_links(db, trace_id))
 
     return templates.TemplateResponse(
         request,

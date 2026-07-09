@@ -7,7 +7,7 @@
     {% if node_info %}
     <span class="role-badge">{{ node_info.role or 'CLIENT' }}</span>
     <span class="meta">{{ node_info.long_name or '' }}{% if node_info.short_name %} ({{ node_info.short_name }}){% endif %}</span>
-    <span class="meta">Last seen: {{ node_info.last_seen_ts }}</span>
+    <span class="meta">Last seen: <time class="ts-utc" datetime="{{ node_info.last_seen_ts | format_ts }}">{{ node_info.last_seen_ts | format_ts }}</time></span>
     {% endif %}
   </div>
 
@@ -28,10 +28,10 @@
       </select>
     </label>
     <label>Start
-      <input type="datetime-local" x-model="start" @change="onChange()">
+      <input type="datetime-local" x-model="start" @change="onTimeChange()">
     </label>
     <label>End
-      <input type="datetime-local" x-model="end" @change="onChange()">
+      <input type="datetime-local" x-model="end" @change="onTimeChange()">
     </label>
   </div>
 
@@ -52,7 +52,7 @@
           <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
           <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
           <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
-          <td>{{ trace.first_seen_ts }}</td>
+           <td><time class="ts-utc" datetime="{{ trace.first_seen_ts | format_ts }}">{{ trace.first_seen_ts | format_ts }}</time></td>
         </tr>
       {% else %}
         <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No traceroutes found for this node</td></tr>
@@ -66,29 +66,66 @@
 <script>
 function nodeControls() {
   const p = new URLSearchParams(location.search);
+  const hasTimeInUrl = p.has('start') || p.has('end');
   const nodeId = '{{ node_id }}';
   return {
     depth: p.get('depth') || '1',
     direction: p.get('direction') || 'both',
-    start: p.get('start') || '{{ default_start }}',
-    end: p.get('end') || '{{ default_end }}',
+    start: hasTimeInUrl ? utcToLocal(p.get('start')) : utcToLocal('{{ default_start }}'),
+    end: hasTimeInUrl ? utcToLocal(p.get('end')) : utcToLocal('{{ default_end }}'),
+    userSetTime: hasTimeInUrl,
     loading: false,
+    _t: 0,
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('depth', this.depth);
       q.set('direction', this.direction);
-      if (this.start) q.set('start', this.start);
-      if (this.end) q.set('end', this.end);
-      return `/graph/node/${nodeId}?${q}`;
+      q.set('start', localToUtc(this.start));
+      q.set('end', localToUtc(this.end));
+      if (this._t) q.set('_t', this._t);
+      return '/graph/node/' + nodeId + '?' + q;
+    },
+    onTimeChange() {
+      this.userSetTime = true;
+      this.onChange();
     },
     onChange() {
       this.loading = true;
       const u = new URL(window.location);
-      const params = { depth: this.depth, direction: this.direction, start: this.start, end: this.end };
-      for (const [k, v] of Object.entries(params)) {
+      if (this.userSetTime) {
+        u.searchParams.set('start', localToUtc(this.start));
+        u.searchParams.set('end', localToUtc(this.end));
+      } else {
+        u.searchParams.delete('start');
+        u.searchParams.delete('end');
+      }
+      for (const [k, v] of Object.entries({
+        depth: this.depth,
+        direction: this.direction,
+      })) {
         if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
       }
       history.pushState({}, '', u);
+    },
+    forceRefresh() { this._t = Date.now(); this.loading = true; },
+    init() {
+      if (this.userSetTime) return;
+      var self = this;
+      function tick() {
+        var now = new Date();
+        var end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0));
+        var start = new Date(end.getTime() - 86400000);
+        var ns = utcToLocal(start.toISOString());
+        var ne = utcToLocal(end.toISOString());
+        if (self.start !== ns || self.end !== ne) {
+          self.start = ns;
+          self.end = ne;
+          self.forceRefresh();
+        }
+      }
+      tick();
+      setInterval(tick, 60000);
+      document.addEventListener('visibilitychange', function() { if (!document.hidden) tick(); });
     }
   }
 }

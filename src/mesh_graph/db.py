@@ -551,3 +551,49 @@ def get_links_for_nodes(
         span.set_attribute("db.node_count", len(node_ids))
         span.set_attribute("db.direction", direction)
         return all_rows
+
+
+def _max_ts(conn: sqlite3.Connection, table: str, where: list[str], params: list) -> int:
+    sql = f"SELECT COALESCE(MAX(ts), 0) FROM {table}"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return conn.execute(sql, params).fetchone()[0]
+
+
+def _time_window(start_ts: Optional[int], end_ts: Optional[int]) -> tuple[list[str], list]:
+    clauses: list[str] = []
+    params: list = []
+    if start_ts is not None:
+        clauses.append("ts >= ?")
+        params.append(start_ts)
+    if end_ts is not None:
+        clauses.append("ts <= ?")
+        params.append(end_ts)
+    return clauses, params
+
+
+def get_max_link_ts(
+    conn: sqlite3.Connection,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> int:
+    clauses, params = _time_window(start_ts, end_ts)
+    return _max_ts(conn, "traceroute_link", clauses, params)
+
+
+def get_max_link_ts_for_node(
+    conn: sqlite3.Connection,
+    nid: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> int:
+    clauses = ["(link_start = ? OR link_end = ?)"]
+    params: list = [nid, nid]
+    tw_c, tw_p = _time_window(start_ts, end_ts)
+    return _max_ts(conn, "traceroute_link", clauses + tw_c, params + tw_p)
+
+
+def get_max_ts_for_trace(conn: sqlite3.Connection, trace_id: int) -> int:
+    link_ts = _max_ts(conn, "traceroute_link", ["trace_id = ?"], [trace_id])
+    uplink_ts = _max_ts(conn, "traceroute_uplink", ["trace_id = ?"], [trace_id])
+    return max(link_ts, uplink_ts)

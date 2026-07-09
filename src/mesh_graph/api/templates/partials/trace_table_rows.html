@@ -6,7 +6,7 @@
       <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
       <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
       <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
-      <td>{{ trace.first_seen_ts }}</td>
+      <td><time class="ts-utc" datetime="{{ trace.first_seen_ts | format_ts }}">{{ trace.first_seen_ts | format_ts }}</time></td>
     </tr>
   {% else %}
     <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">No traceroutes found</td></tr>

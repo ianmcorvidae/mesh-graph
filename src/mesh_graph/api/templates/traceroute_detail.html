@@ -6,7 +6,7 @@
     <h1>Traceroute {{ trace_id }}</h1>
     {% if trace_info %}
     <span class="meta"><a href="/nodes/!{{ '%08x' % trace_info.from_id }}" class="node-id">!{{ '%08x' % trace_info.from_id }}</a> → <a href="/nodes/!{{ '%08x' % trace_info.to_id }}" class="node-id">!{{ '%08x' % trace_info.to_id }}</a></span>
-    <span class="meta">First seen: {{ trace_info.first_seen_ts }}</span>
+    <span class="meta">First seen: <time class="ts-utc" datetime="{{ trace_info.first_seen_ts | format_ts }}">{{ trace_info.first_seen_ts | format_ts }}</time></span>
     {% endif %}
   </div>
 
@@ -33,25 +33,59 @@
 
   <div class="section">
     <h2 class="section-title">Trace Links</h2>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="fastPathOnly">
+      Fast path only
+    </label>
     <table>
-      <thead><tr><th>Link</th><th>SNR</th><th>Type</th><th>Timestamp</th></tr></thead>
-      <tbody>
-      {% for link in trace_links %}
+      <thead>
         <tr>
-          <td><span class="node-id">{{ link.link_start }}</span> → <span class="node-id">{{ link.link_end }}</span></td>
-          <td>{{ link.snr or '?' }} dB</td>
-          <td>{% if link.is_reply %}Reply{% else %}Probe{% endif %}{% if link.is_fast_path %} (fast){% endif %}</td>
-          <td>{{ link.ts }}</td>
+          <th class="sortable" @click="sortBy('link_start_hex')">Source <span x-show="sortKey==='link_start_hex'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
+          <th class="sortable" @click="sortBy('link_end_hex')">Destination <span x-show="sortKey==='link_end_hex'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
+          <th class="sortable" @click="sortBy('snr')">SNR <span x-show="sortKey==='snr'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
+          <th class="sortable" @click="sortBy('direction')">Direction <span x-show="sortKey==='direction'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
+          <th class="sortable" @click="sortBy('is_fast_path')">Fast Path <span x-show="sortKey==='is_fast_path'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
+          <th class="sortable" @click="sortBy('ts')">Timestamp <span x-show="sortKey==='ts'" x-text="sortDir==='asc'?'▲':'▼'"></span></th>
         </tr>
-      {% else %}
-        <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No links found for this traceroute</td></tr>
-      {% endfor %}
+      </thead>
+      <tbody>
+        <template x-for="link in sortedLinks" :key="link.link_start + link.link_end + link.is_reply + link.ts">
+          <tr>
+            <td>
+              <template x-if="link.link_start_is_id">
+                <a :href="'/nodes/!' + link.link_start.toString(16).padStart(8, '0')" class="node-id" x-text="'!' + link.link_start.toString(16).padStart(8, '0')"></a>
+              </template>
+              <template x-if="!link.link_start_is_id">
+                <span class="node-id" x-text="link.link_start"></span>
+              </template>
+            </td>
+            <td>
+              <template x-if="link.link_end_is_id">
+                <a :href="'/nodes/!' + link.link_end.toString(16).padStart(8, '0')" class="node-id" x-text="'!' + link.link_end.toString(16).padStart(8, '0')"></a>
+              </template>
+              <template x-if="!link.link_end_is_id">
+                <span class="node-id" x-text="link.link_end"></span>
+              </template>
+            </td>
+            <td x-text="link.snr != null ? link.snr + ' dB' : '? dB'"></td>
+            <td x-text="link.direction"></td>
+            <td x-text="link.is_fast_path ? 'Yes' : '—'"></td>
+            <td><time class="ts-utc" :datetime="link.ts_iso" x-text="link.ts_iso"></time></td>
+          </tr>
+        </template>
+        <tr x-show="sortedLinks.length === 0">
+          <td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No links found for this traceroute</td>
+        </tr>
       </tbody>
     </table>
   </div>
 </div>
 
 <style>[x-cloak] { display: none !important; }</style>
+<style>
+.sortable { cursor: pointer; user-select: none; }
+.sortable:hover { color: var(--accent); }
+</style>
 <script>
 function traceControls() {
   const p = new URLSearchParams(location.search);
@@ -60,11 +94,43 @@ function traceControls() {
     direction: p.get('direction') || 'both',
     communities: p.get('communities') === 'true',
     loading: false,
+    fastPathOnly: false,
+    sortKey: 'ts',
+    sortDir: 'asc',
+    sortedLinks: [],
+    traceLinks: {{ trace_links | tojson }},
+    sortBy(key) {
+      if (this.sortKey === key) {
+        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        this.sortKey = key;
+        this.sortDir = 'asc';
+      }
+      this._recalculate();
+    },
+    _recalculate() {
+      var links = this.traceLinks;
+      if (this.fastPathOnly) links = links.filter(function(l) { return l.is_fast_path; });
+      var k = this.sortKey;
+      var d = this.sortDir === 'asc' ? 1 : -1;
+      links = links.slice().sort(function(a, b) {
+        var va = a[k], vb = b[k];
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === 'string') return va.localeCompare(vb) * d;
+        return (va - vb) * d;
+      });
+      this.sortedLinks = links;
+    },
+    init() {
+      this._recalculate();
+      this.$watch('fastPathOnly', function() { this._recalculate(); }.bind(this));
+    },
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('direction', this.direction);
       q.set('communities', this.communities ? 'true' : 'false');
-      return `/graph/trace/${traceId}?${q}`;
+      return '/graph/trace/' + traceId + '?' + q;
     },
     onChange() {
       this.loading = true;

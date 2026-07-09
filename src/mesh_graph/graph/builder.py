@@ -363,10 +363,14 @@ def _add_collapsed_edges(
 def _set_clickable_nodes(G: nx.Graph) -> None:
     for node in list(G.nodes):
         s = str(node)
-        if s.startswith("!") and len(s) == 9:
+        base = s
+        for suffix in (" [out]", " [in]"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+        if base.startswith("!") and len(base) == 9:
             try:
-                int(s[1:], 16)
-                G.nodes[node]["URL"] = f"/nodes/{s}"
+                int(base[1:], 16)
+                G.nodes[node]["URL"] = f"/nodes/{base}"
                 G.nodes[node]["target"] = "_top"
             except ValueError:
                 pass

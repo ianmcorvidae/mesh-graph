@@ -6,10 +6,10 @@
 
   <div class="controls">
     <label>Start
-      <input type="datetime-local" x-model="start" @change="onChange()">
+      <input type="datetime-local" x-model="start" @change="onTimeChange()">
     </label>
     <label>End
-      <input type="datetime-local" x-model="end" @change="onChange()">
+      <input type="datetime-local" x-model="end" @change="onTimeChange()">
     </label>
     <label class="checkbox-label">
       <input type="checkbox" x-model="snrLabels" @change="onChange()">
@@ -37,30 +37,68 @@
 <script>
 function networkControls() {
   const p = new URLSearchParams(location.search);
+  const hasTimeInUrl = p.has('start') || p.has('end');
   return {
-    start: p.get('start') || '{{ default_start }}',
-    end: p.get('end') || '{{ default_end }}',
+    start: hasTimeInUrl ? utcToLocal(p.get('start')) : utcToLocal('{{ default_start }}'),
+    end: hasTimeInUrl ? utcToLocal(p.get('end')) : utcToLocal('{{ default_end }}'),
+    userSetTime: hasTimeInUrl,
     snrLabels: p.get('snr_labels') === 'true',
     includeClients: p.get('include_clients') === 'true',
     includeUnknown: p.get('include_unknown_nodes') === 'true',
     loading: false,
+    _t: 0,
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
-      if (this.start) q.set('start', this.start);
-      if (this.end) q.set('end', this.end);
+      q.set('start', localToUtc(this.start));
+      q.set('end', localToUtc(this.end));
       if (this.snrLabels) q.set('snr_labels', 'true');
       if (this.includeClients) q.set('include_clients', 'true');
       if (this.includeUnknown) q.set('include_unknown_nodes', 'true');
-      return `/graph/network?${q}`;
+      if (this._t) q.set('_t', this._t);
+      return '/graph/network?' + q;
+    },
+    onTimeChange() {
+      this.userSetTime = true;
+      this.onChange();
     },
     onChange() {
       this.loading = true;
       const u = new URL(window.location);
-      const params = { start: this.start, end: this.end, snr_labels: this.snrLabels ? 'true' : '', include_clients: this.includeClients ? 'true' : '', include_unknown_nodes: this.includeUnknown ? 'true' : '' };
-      for (const [k, v] of Object.entries(params)) {
+      if (this.userSetTime) {
+        u.searchParams.set('start', localToUtc(this.start));
+        u.searchParams.set('end', localToUtc(this.end));
+      } else {
+        u.searchParams.delete('start');
+        u.searchParams.delete('end');
+      }
+      for (const [k, v] of Object.entries({
+        snr_labels: this.snrLabels ? 'true' : '',
+        include_clients: this.includeClients ? 'true' : '',
+        include_unknown_nodes: this.includeUnknown ? 'true' : '',
+      })) {
         if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
       }
       history.pushState({}, '', u);
+    },
+    forceRefresh() { this._t = Date.now(); this.loading = true; },
+    init() {
+      if (this.userSetTime) return;
+      var self = this;
+      function tick() {
+        var now = new Date();
+        var end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0));
+        var start = new Date(end.getTime() - 86400000);
+        var ns = utcToLocal(start.toISOString());
+        var ne = utcToLocal(end.toISOString());
+        if (self.start !== ns || self.end !== ne) {
+          self.start = ns;
+          self.end = ne;
+          self.forceRefresh();
+        }
+      }
+      tick();
+      setInterval(tick, 60000);
+      document.addEventListener('visibilitychange', function() { if (!document.hidden) tick(); });
     }
   }
 }

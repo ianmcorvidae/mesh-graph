@@ -884,6 +884,75 @@ def test_cache_does_not_store_404(client, db):
 
 
 # ---------------------------------------------------------------------------
+# _default_time_bounds / format_ts
+# ---------------------------------------------------------------------------
+
+
+def test_default_time_bounds_rounded():
+    from datetime import datetime
+
+    from mesh_graph.api.ui import _default_time_bounds
+
+    start, end = _default_time_bounds()
+    assert start.endswith(":00Z"), f"start {start!r} does not end with :00Z"
+    assert end.endswith(":00Z"), f"end {end!r} does not end with :00Z"
+    s = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    assert (e - s).total_seconds() == 86400
+    assert s.minute == 0 and s.second == 0
+    assert e.minute == 0 and e.second == 0
+
+
+def test_format_ts():
+    from mesh_graph.api.ui import format_ts
+
+    assert format_ts(None) == ""
+    assert format_ts(0) == "1970-01-01T00:00:00Z"
+    assert format_ts(946684800) == "2000-01-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# network graph version-key cache behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_network_graph_cache_key_includes_max_ts(client, db):
+    _insert(db)
+    client.get("/graph/network")
+    cache = client.app.state._graph_cache
+    (key,) = cache._data.keys()
+    assert "max_ts=" in key
+    assert "end_is_past=" in key
+
+
+def test_network_graph_cache_busts_on_new_data_in_window(client, db):
+    _insert(db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, ts=NOW)
+    client.get("/graph/network")
+    keys_before = set(client.app.state._graph_cache._data.keys())
+    _insert(db, trace_id=TRACE_1 + 1, from_id=NODE_A, to_id=NODE_B, ts=NOW + 100)
+    client.get("/graph/network")
+    keys_after = set(client.app.state._graph_cache._data.keys())
+    assert keys_after != keys_before
+
+
+def test_network_graph_cache_not_busted_by_out_of_window_data(client, db):
+    _insert(db, ts=NOW)
+    resp1 = client.get(f"/graph/network?start={_iso(NOW - 100)}&end={_iso(NOW)}")
+    assert resp1.status_code == 200
+    _insert(db, trace_id=9999, from_id=0xEEEEEEEE, to_id=0xFFFFFFFF, ts=NOW + 100)
+    resp2 = client.get(f"/graph/network?start={_iso(NOW - 100)}&end={_iso(NOW)}")
+    assert resp2.status_code == 200
+    assert resp2.content == resp1.content
+
+
+def test_network_graph_cache_shared_across_similar_windows(client, db):
+    _insert(db, ts=NOW)
+    resp1 = client.get(f"/graph/network?start={_iso(NOW - 200)}&end={_iso(NOW)}")
+    resp2 = client.get(f"/graph/network?start={_iso(NOW - 200)}&end={_iso(NOW + 1)}")
+    assert resp2.content == resp1.content
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

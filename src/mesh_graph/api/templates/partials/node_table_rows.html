@@ -7,7 +7,7 @@
       <td>{{ node.long_name or '' }}</td>
       <td>{{ node.short_name or '' }}</td>
       <td><span class="role-badge">{{ node.role or 'CLIENT' }}</span></td>
-      <td>{{ node.last_seen_ts }}</td>
+      <td><time class="ts-utc" datetime="{{ node.last_seen_ts | format_ts }}">{{ node.last_seen_ts | format_ts }}</time></td>
     </tr>
   {% else %}
     <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem;">No nodes found</td></tr>
