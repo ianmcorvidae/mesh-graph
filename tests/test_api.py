@@ -1255,6 +1255,20 @@ def test_build_and_render_different_keys_different_cache_entries(client, db):
 
 
 # ---------------------------------------------------------------------------
+# compression
+# ---------------------------------------------------------------------------
+
+
+def test_svg_response_is_gzipped_when_client_accepts(client, db):
+    insert_link(
+        db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
+    )
+    resp = client.get("/graph/network", headers={"Accept-Encoding": "gzip"})
+    assert resp.headers.get("Content-Encoding") == "gzip"
+    assert resp.headers.get("Vary") == "Accept-Encoding"
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

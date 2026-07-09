@@ -8,6 +8,7 @@ from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from starlette.staticfiles import StaticFiles
+from starlette_compress import CompressMiddleware
 
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
@@ -176,6 +177,7 @@ def create_app(
     db: sqlite3.Connection, observability_cfg: Optional[ObservabilityConfig] = None
 ) -> FastAPI:
     app = FastAPI(title="mesh-graph")
+    app.add_middleware(CompressMiddleware, minimum_size=500)
     if observability_cfg and observability_cfg.enabled:
         instrument_fastapi(app)
     _cache = _GraphCache()
