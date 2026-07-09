@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Optional
+
 
 def node_id_str(nodenum: int) -> str:
     return f"!{nodenum:08x}"
@@ -17,3 +20,16 @@ def int_to_hex_color(n: int | float) -> str:
     g = (n & 0x00FF00) >> 8
     b = n & 0x0000FF
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def parse_iso(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    dt = datetime.fromisoformat(value.replace(" ", "+"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def parse_time_bounds(start: str, end: str) -> tuple[int, int]:
+    return parse_iso(start), parse_iso(end)

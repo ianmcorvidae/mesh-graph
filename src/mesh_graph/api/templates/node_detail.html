@@ -43,6 +43,57 @@
   </div>
 
   <div class="section">
+    <h2 class="section-title">Connections</h2>
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortBy('direction')" :class="{ sorted: sortKey === 'direction' }" class="sortable">
+            Direction <span class="sort-arrow" x-text="sortKey === 'direction' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('node_hex')" :class="{ sorted: sortKey === 'node_hex' }" class="sortable">
+            Node <span class="sort-arrow" x-text="sortKey === 'node_hex' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('short_name')" :class="{ sorted: sortKey === 'short_name' }" class="sortable">
+            Name <span class="sort-arrow" x-text="sortKey === 'short_name' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('role')" :class="{ sorted: sortKey === 'role' }" class="sortable">
+            Role <span class="sort-arrow" x-text="sortKey === 'role' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('link_count')" :class="{ sorted: sortKey === 'link_count' }" class="sortable">
+            Links <span class="sort-arrow" x-text="sortKey === 'link_count' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('snr_min')" :class="{ sorted: sortKey === 'snr_min' }" class="sortable">
+            SNR Min <span class="sort-arrow" x-text="sortKey === 'snr_min' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('snr_max')" :class="{ sorted: sortKey === 'snr_max' }" class="sortable">
+            SNR Max <span class="sort-arrow" x-text="sortKey === 'snr_max' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+          <th @click="sortBy('last_seen')" :class="{ sorted: sortKey === 'last_seen' }" class="sortable">
+            Last Seen <span class="sort-arrow" x-text="sortKey === 'last_seen' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'"></span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+      <template x-for="(conn, i) in sortedConnections" :key="i">
+        <tr>
+          <td x-text="conn.direction === 'in' ? 'In' : 'Out'"></td>
+          <td><a :href="'/nodes/' + conn.node_hex" class="node-id" x-text="conn.node_hex"></a></td>
+          <td x-text="conn.short_name || ''"></td>
+          <td><template x-if="conn.role"><span class="role-badge" x-text="conn.role"></span></template></td>
+          <td x-text="conn.link_count"></td>
+          <td x-text="conn.snr_min != null ? conn.snr_min + ' dB' : '? dB'"></td>
+          <td x-text="conn.snr_max != null ? conn.snr_max + ' dB' : '? dB'"></td>
+          <td><time class="ts-utc" :datetime="conn.last_seen_iso" x-text="conn.last_seen_fmt"></time></td>
+        </tr>
+      </template>
+      <template x-if="sortedConnections.length === 0">
+        <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No connections found in this time range</td></tr>
+      </template>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
     <h2 class="section-title">Recent Traceroutes Involving This Node</h2>
     <table>
       <thead><tr><th>Trace ID</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
@@ -67,6 +118,8 @@ function nodeControls() {
   const p = new URLSearchParams(location.search);
   const hasTimeInUrl = p.has('start') || p.has('end');
   const nodeId = '{{ node_id }}';
+  const connections = {{ connections | tojson }};
+  var sortedConnections = connections.slice().sort(function(a, b) { return b.link_count - a.link_count; });
   return {
     depth: p.get('depth') || '1',
     direction: p.get('direction') || 'both',
@@ -74,6 +127,32 @@ function nodeControls() {
     end: hasTimeInUrl ? utcToLocal(p.get('end')) : utcToLocal('{{ default_end }}'),
     userSetTime: hasTimeInUrl,
     loading: false,
+    sortKey: 'link_count',
+    sortDir: 'desc',
+    sortedConnections: sortedConnections,
+    connections: connections,
+    sortBy(key) {
+      if (this.sortKey === key) {
+        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        this.sortKey = key;
+        this.sortDir = 'asc';
+      }
+      this._recalculateConnections();
+    },
+    _recalculateConnections() {
+      var conns = this.connections.slice();
+      var k = this.sortKey;
+      var d = this.sortDir === 'asc' ? 1 : -1;
+      conns.sort(function(a, b) {
+        var va = a[k], vb = b[k];
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === 'string') return va.localeCompare(vb) * d;
+        return (va - vb) * d;
+      });
+      this.sortedConnections = conns;
+    },
     get graphUrl() {
       const q = new URLSearchParams({ format: 'svg', clickable: 'true' });
       q.set('depth', this.depth);

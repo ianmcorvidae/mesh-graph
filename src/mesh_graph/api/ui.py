@@ -10,6 +10,7 @@ from starlette.templating import Jinja2Templates
 
 from mesh_graph.db import (
     get_dashboard_stats,
+    get_links_for_nodes,
     get_links_for_trace,
     get_node,
     get_nodes,
@@ -19,7 +20,7 @@ from mesh_graph.db import (
     get_traceroutes_for_node,
     parse_node_id,
 )
-from mesh_graph.utils import node_id_format, node_id_str
+from mesh_graph.utils import node_id_format, node_id_str, parse_time_bounds
 
 router = APIRouter()
 TEMPLATES = os.path.join(os.path.dirname(__file__), "templates")
@@ -39,11 +40,81 @@ def format_ts(ts: Optional[int]) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def format_ts_fmt(ts: Optional[int]) -> str:
+    if ts is None:
+        return ""
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return dt.strftime("%b %d, %Y, %I:%M %p UTC")
+
+
 templates.env.filters["format_ts"] = format_ts
 
 
 def _get_db(request: Request):
     return request.app.state.db
+
+
+def _group_node_connections(
+    db, nid: int, start_ts: Optional[int], end_ts: Optional[int]
+) -> list[dict]:
+    rows = get_links_for_nodes(db, [nid], start_ts=start_ts, end_ts=end_ts)
+    groups: dict[tuple[int, str], dict] = {}
+    for row in rows:
+        if isinstance(row["link_start"], int) and row["link_start"] == nid:
+            neighbor = row["link_end"]
+            direction = "out"
+        elif isinstance(row["link_end"], int) and row["link_end"] == nid:
+            neighbor = row["link_start"]
+            direction = "in"
+        else:
+            continue
+        if not isinstance(neighbor, int):
+            continue
+        key = (neighbor, direction)
+        g = groups.get(key)
+        if g is None:
+            g = {
+                "node_id": neighbor,
+                "node_hex": node_id_format(neighbor),
+                "direction": direction,
+                "link_count": 0,
+                "snr_min": None,
+                "snr_max": None,
+                "last_seen": 0,
+                "role": None,
+                "short_name": None,
+            }
+            groups[key] = g
+        g["link_count"] += 1
+        snr = row["snr"]
+        if snr is not None:
+            if g["snr_min"] is None or snr < g["snr_min"]:
+                g["snr_min"] = snr
+            if g["snr_max"] is None or snr > g["snr_max"]:
+                g["snr_max"] = snr
+        ts = row["ts"]
+        if ts is not None and ts > g["last_seen"]:
+            g["last_seen"] = ts
+
+    if groups:
+        from mesh_graph.db import get_node_attrs
+
+        all_attrs = get_node_attrs(
+            db,
+            relevant_nodenums={k[0] for k in groups},
+        )
+        for (neighbor, _), g in groups.items():
+            name_str = node_id_format(neighbor)
+            attrs = all_attrs.get(name_str, {})
+            label = attrs.get("label", "")
+            lines = label.split("\n")
+            g["short_name"] = lines[1] if len(lines) > 1 else None
+            g["role"] = lines[2] if len(lines) > 2 else None
+            g["last_seen_iso"] = format_ts(g["last_seen"])
+            g["last_seen_fmt"] = format_ts_fmt(g["last_seen"])
+
+    result = sorted(groups.values(), key=lambda g: g["link_count"], reverse=True)
+    return result
 
 
 def _enrich_trace_links(links: list[dict]) -> list[dict]:
@@ -143,6 +214,8 @@ def node_detail(
     node_info = get_node(db, nid)
     recent_traces = [dict(r) for r in get_traceroutes_for_node(db, nid)]
     default_start, default_end = _default_time_bounds()
+    start_ts, end_ts = parse_time_bounds(default_start, default_end)
+    connections = _group_node_connections(db, nid, start_ts=start_ts, end_ts=end_ts)
 
     return templates.TemplateResponse(
         request,
@@ -152,6 +225,7 @@ def node_detail(
             "node_id_int": nid,
             "node_info": dict(node_info) if node_info else None,
             "recent_traces": recent_traces,
+            "connections": connections,
             "default_start": default_start,
             "default_end": default_end,
         },

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -27,6 +26,7 @@ from mesh_graph.graph.builder import (
 )
 from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
+from mesh_graph.utils import parse_iso, parse_time_bounds
 
 
 class _GraphCache:
@@ -103,22 +103,12 @@ _TRACE_GRAPH_QUERY_PARAMS = {
 _NODE_GRAPH_QUERY_PARAMS = {"format", "start", "end", "direction", "depth", "clickable"}
 
 
-def _parse_iso(value: Optional[str]) -> Optional[int]:
-    if value is None:
-        return None
-    # '+' in a query string is decoded as a space; restore it for ISO 8601 offsets
-    dt = datetime.fromisoformat(value.replace(" ", "+"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
-
-
 def _parse_time_range(
     start: Optional[str], end: Optional[str]
 ) -> tuple[Optional[int], Optional[int]]:
     try:
-        return _parse_iso(start), _parse_iso(end)
-    except ValueError as exc:
+        return parse_time_bounds(start, end)
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 
 
@@ -278,7 +268,7 @@ def create_app(
             except ValueError:
                 raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
             try:
-                approx_ts = _parse_iso(date)
+                approx_ts = parse_iso(date)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"Invalid timestamp: {exc}") from exc
 

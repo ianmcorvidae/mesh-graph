@@ -102,6 +102,10 @@ table {
 }
 th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
 th { background: #f1f3f5; font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { background: #e9ecef; }
+th.sorted { color: var(--text); background: #e3e8ee; }
+.sort-arrow { font-size: 0.7rem; margin-left: 0.2rem; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: #f8f9fa; }
 
