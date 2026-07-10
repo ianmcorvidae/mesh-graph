@@ -44,6 +44,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             )
         """)
         _ensure_column(conn, "traceroute_link", "route_len", "INTEGER")
+        _ensure_column(
+            conn, "traceroute_link", "link_start_position_id", "INTEGER REFERENCES positions(id)"
+        )
+        _ensure_column(
+            conn, "traceroute_link", "link_end_position_id", "INTEGER REFERENCES positions(id)"
+        )
+        _ensure_column(conn, "traceroute_link", "link_start_position_received_ts", "INTEGER")
+        _ensure_column(conn, "traceroute_link", "link_end_position_received_ts", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS traceroute_link_ts ON traceroute_link(ts)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_traceroute_link_start ON traceroute_link(link_start)"
@@ -51,6 +59,16 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_traceroute_link_end ON traceroute_link(link_end)"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id           INTEGER PRIMARY KEY,
+                latitude_i   INTEGER NOT NULL,
+                longitude_i  INTEGER NOT NULL,
+                precision    INTEGER NOT NULL,
+                source       TEXT NOT NULL,
+                UNIQUE(latitude_i, longitude_i, precision, source)
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS nodes (
                 nodenum      INTEGER PRIMARY KEY,
@@ -60,6 +78,8 @@ def init_db(conn: sqlite3.Connection) -> None:
                 last_seen_ts INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        _ensure_column(conn, "nodes", "position_id", "INTEGER REFERENCES positions(id)")
+        _ensure_column(conn, "nodes", "position_received_ts", "INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_nodes_lookup ON nodes(last_seen_ts DESC, nodenum DESC)"
         )
@@ -105,6 +125,90 @@ def upsert_node(
             """,
             (nodenum, long_name, short_name, role, int(time.time())),
         )
+
+
+def upsert_position(
+    conn: sqlite3.Connection,
+    nodenum: int,
+    latitude_i: int,
+    longitude_i: int,
+    precision: int,
+    source: str,
+) -> None:
+    """Insert a position (deduplicated) and update the node's pointer.
+
+    Positions are deduplicated by (latitude_i, longitude_i, precision, source):
+    identical positions shared across nodes reuse the same row.
+
+    SOURCE PRIORITY:
+      - 'position_app' always wins over 'map_report'
+      - MapReport positions only update the node pointer when the node's
+        current position was not sourced from POSITION_APP.
+    """
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO positions (latitude_i, longitude_i, precision, source) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(latitude_i, longitude_i, precision, source) DO NOTHING",
+            (latitude_i, longitude_i, precision, source),
+        )
+        if cur.rowcount == 0:
+            pos_id = conn.execute(
+                "SELECT id FROM positions "
+                "WHERE latitude_i=? AND longitude_i=? AND precision=? AND source=?",
+                (latitude_i, longitude_i, precision, source),
+            ).fetchone()["id"]
+        else:
+            pos_id = cur.lastrowid
+
+        now = int(time.time())
+
+        # Ensure the node row exists so the position pointer has somewhere to land.
+        conn.execute("INSERT OR IGNORE INTO nodes (nodenum) VALUES (?)", (nodenum,))
+
+        if source == "position_app":
+            conn.execute(
+                "UPDATE nodes SET position_id = ?, position_received_ts = ? WHERE nodenum = ?",
+                (pos_id, now, nodenum),
+            )
+        else:
+            conn.execute(
+                "UPDATE nodes SET position_id = ?, position_received_ts = ? "
+                "WHERE nodenum = ? AND ("
+                "  position_id IS NULL OR"
+                "  EXISTS (SELECT 1 FROM positions WHERE id = nodes.position_id AND source != 'position_app')"
+                ")",
+                (pos_id, now, nodenum),
+            )
+
+
+def get_position(conn: sqlite3.Connection, position_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM positions WHERE id = ?", (position_id,)).fetchone()
+
+
+def get_link_positions_for_trace(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: Optional[int] = None,
+    to_id: Optional[int] = None,
+) -> list[sqlite3.Row]:
+    """Return traceroute_link rows joined with their endpoint position data."""
+    trace = _select_trace_candidate(conn, trace_id=trace_id, from_id=from_id, to_id=to_id)
+    if trace is None:
+        return []
+    return conn.execute(
+        "SELECT tl.*, "
+        "  ps.latitude_i AS start_lat_i, ps.longitude_i AS start_lon_i, "
+        "  ps.precision AS start_precision, ps.source AS start_source, "
+        "  pe.latitude_i AS end_lat_i, pe.longitude_i AS end_lon_i, "
+        "  pe.precision AS end_precision, pe.source AS end_source "
+        "FROM traceroute_link tl "
+        "LEFT JOIN positions ps ON tl.link_start_position_id = ps.id "
+        "LEFT JOIN positions pe ON tl.link_end_position_id = pe.id "
+        "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
+        "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC",
+        (trace["trace_id"], trace["from_id"], trace["to_id"]),
+    ).fetchall()
 
 
 def record_trace_uplink(

@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from google.protobuf import json_format
 from meshtastic.protobuf import config_pb2, mesh_pb2, mqtt_pb2
 
-from mesh_graph.db import get_connection, record_trace_uplink, upsert_node
+from mesh_graph.db import get_connection, record_trace_uplink, upsert_node, upsert_position
 from mesh_graph.ingestion.base import DataSource
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,11 @@ class MQTTDataSource(DataSource):
             logger.debug("Failed to parse ServiceEnvelope: %s", exc)
             return
 
+        self._handle_service_envelope(conn, mp, se)
+
+    def _handle_service_envelope(
+        self, conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket, se: mqtt_pb2.ServiceEnvelope
+    ) -> None:
         if mp.HasField("encrypted") and not mp.HasField("decoded"):
             try:
                 self._decrypt(mp)
@@ -132,6 +137,18 @@ class MQTTDataSource(DataSource):
             except Exception as exc:
                 logger.warning("Error processing NODEINFO_APP: %s", exc)
 
+        elif portnum == "POSITION_APP":
+            try:
+                self._handle_position(conn, mp)
+            except Exception as exc:
+                logger.warning("Error processing POSITION_APP: %s", exc)
+
+        elif portnum == "MAP_REPORT_APP":
+            try:
+                self._handle_map_report(conn, mp)
+            except Exception as exc:
+                logger.warning("Error processing MAP_REPORT_APP: %s", exc)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -156,6 +173,56 @@ class MQTTDataSource(DataSource):
             conn, nodenum, long_name=user.long_name, short_name=user.short_name, role=role_name
         )
         logger.debug("Updated node info for !%08x (%s)", nodenum, user.long_name)
+
+    def _handle_position(self, conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket) -> None:
+        pos = mesh_pb2.Position()
+        pos.ParseFromString(mp.decoded.payload)
+        nodenum = getattr(mp, "from")
+        if not nodenum:
+            logger.debug("Position has no sender; skipping")
+            return
+
+        if pos.precision_bits == 0:
+            return
+
+        latitude_i = pos.latitude_i
+        longitude_i = pos.longitude_i
+        if latitude_i == 0 and longitude_i == 0:
+            return
+
+        upsert_position(conn, nodenum, latitude_i, longitude_i, pos.precision_bits, "position_app")
+        logger.debug(
+            "Updated position for !%08x (lat_i=%d, lon_i=%d)", nodenum, latitude_i, longitude_i
+        )
+
+    def _handle_map_report(
+        self,
+        conn: sqlite3.Connection,
+        mp: mesh_pb2.MeshPacket,
+    ) -> None:
+        nodenum = getattr(mp, "from")
+        if not nodenum:
+            logger.debug("MapReport has no sender; skipping")
+            return
+
+        mr = mqtt_pb2.MapReport()
+        mr.ParseFromString(mp.decoded.payload)
+
+        if mr.position_precision == 0:
+            return
+
+        latitude_i = mr.latitude_i
+        longitude_i = mr.longitude_i
+        if latitude_i == 0 and longitude_i == 0:
+            return
+
+        upsert_position(conn, nodenum, latitude_i, longitude_i, mr.position_precision, "map_report")
+        logger.debug(
+            "Updated map_report position for !%08x (lat_i=%d, lon_i=%d)",
+            nodenum,
+            latitude_i,
+            longitude_i,
+        )
 
     def _handle_traceroute(
         self,
@@ -250,6 +317,8 @@ class MQTTDataSource(DataSource):
                         for e in inbound_edges
                     ],
                 )
+
+        _snapshot_link_positions(conn, trace_id, from_id, to_id)
 
     def _build_outbound_edges(self, p, rd, trace_direction, is_mqtt, via, from_id, to_id):
         edges = []
@@ -362,3 +431,70 @@ class MQTTDataSource(DataSource):
             if hop != via:
                 return hop
         return default_node
+
+
+def _snapshot_link_positions(
+    conn: sqlite3.Connection,
+    trace_id: int,
+    from_id: int,
+    to_id: int,
+) -> None:
+    """Snapshot current node positions onto newly inserted traceroute_link rows.
+
+    For each link in this trace, look up the current position_id and
+    position_received_ts for both link_start and link_end nodes and write
+    them to the link's position FK columns and received timestamp columns.
+    Nodes without a position get NULL for both.
+    """
+    # Collect all integer node IDs that appear in this trace's links
+    link_rows = conn.execute(
+        "SELECT link_start, link_end FROM traceroute_link "
+        "WHERE trace_id = ? AND from_id = ? AND to_id = ?",
+        (trace_id, from_id, to_id),
+    ).fetchall()
+
+    node_ids: set[int] = set()
+    for row in link_rows:
+        for val in (row["link_start"], row["link_end"]):
+            if isinstance(val, int):
+                node_ids.add(val)
+
+    if not node_ids:
+        return
+
+    # Batch-fetch position_id and position_received_ts for all nodes
+    placeholders = ",".join("?" * len(node_ids))
+    pos_rows = conn.execute(
+        f"SELECT nodenum, position_id, position_received_ts "
+        f"FROM nodes WHERE nodenum IN ({placeholders})",
+        list(node_ids),
+    ).fetchall()
+    pos_by_node = {r["nodenum"]: (r["position_id"], r["position_received_ts"]) for r in pos_rows}
+
+    # Update links: set position FKs and received timestamps
+    with conn:
+        for row in link_rows:
+            start_pos, start_ts = (None, None)
+            end_pos, end_ts = (None, None)
+            if isinstance(row["link_start"], int) and row["link_start"] in pos_by_node:
+                start_pos, start_ts = pos_by_node[row["link_start"]]
+            if isinstance(row["link_end"], int) and row["link_end"] in pos_by_node:
+                end_pos, end_ts = pos_by_node[row["link_end"]]
+            conn.execute(
+                "UPDATE traceroute_link SET "
+                "link_start_position_id = ?, link_end_position_id = ?, "
+                "link_start_position_received_ts = ?, link_end_position_received_ts = ? "
+                "WHERE trace_id = ? AND from_id = ? AND to_id = ? "
+                "AND link_start = ? AND link_end = ?",
+                (
+                    start_pos,
+                    end_pos,
+                    start_ts,
+                    end_ts,
+                    trace_id,
+                    from_id,
+                    to_id,
+                    row["link_start"],
+                    row["link_end"],
+                ),
+            )
