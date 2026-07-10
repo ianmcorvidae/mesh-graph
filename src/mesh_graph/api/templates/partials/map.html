@@ -166,13 +166,34 @@ function meshMap(mapId, geojsonUrl, pageType) {
       var f = e.features[0];
       var props = f.properties;
       var dir_label = { out: 'outbound', in: 'inbound', both: 'bidirectional' };
+      var arrow = props.direction === 'both' ? '\u2194' : '\u2192';
       var lines = [
-        '<strong>' + (props.link_start_label || props.link_start) + ' \u2192 ' + (props.link_end_label || props.link_end) + '</strong>',
-        'SNR: ' + (props.snr != null ? props.snr + ' dB' : '? dB'),
+        '<strong>' + (props.link_start_label || props.link_start) + ' ' + arrow + ' ' + (props.link_end_label || props.link_end) + '</strong>',
         'Direction: ' + (dir_label[props.direction] || props.direction)
       ];
+
+      function snrRange(min, max, avg) {
+        if (min == null || max == null) return '? dB';
+        if (min === max) return min + ' dB';
+        var s = min.toFixed(2) + '..' + max.toFixed(2) + ' dB';
+        if (avg != null) s += ' (avg ' + avg.toFixed(2) + ')';
+        return s;
+      }
+      if (props.out_snr_min != null || props.out_snr_max != null) {
+        lines.push('Outbound SNR: ' + snrRange(props.out_snr_min, props.out_snr_max, props.out_snr_avg));
+      }
+      if (props.in_snr_min != null || props.in_snr_max != null) {
+        lines.push('Inbound SNR: ' + snrRange(props.in_snr_min, props.in_snr_max, props.in_snr_avg));
+      }
+
       if (props.is_fast_path) lines.push('Fast path');
-      if (props.link_count > 1) lines.push('Links aggregated: ' + props.link_count);
+      if (props.link_count > 1) {
+        if (props.direction === 'both') {
+          lines.push('Links aggregated: ' + props.out_link_count + ' out \u2192, ' + props.in_link_count + ' in \u2190');
+        } else {
+          lines.push('Links aggregated: ' + props.link_count);
+        }
+      }
       if (props.route_len) lines.push('Route length: ' + props.route_len);
       if (props.is_overflow === true || props.is_overflow === 'true') lines.push('Route overflow (\u22658 hops)');
       if (props.is_unknown_hop) lines.push('Unknown hop');

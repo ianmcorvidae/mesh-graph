@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import math
 import sqlite3
 from typing import Optional
@@ -198,6 +199,70 @@ def _node_info(conn: sqlite3.Connection, nodenum: int) -> sqlite3.Row:
     return row
 
 
+_SNR_HIST_EDGES = (-15, -12, -9, -6, -3, 0, 3, 6, 9)
+
+
+def _snr_histogram(values: list[float]) -> list[int]:
+    """Bucket SNR values into fixed-width bins and return counts."""
+    counts = [0] * (len(_SNR_HIST_EDGES) + 1)
+    for v in values:
+        counts[bisect.bisect_right(_SNR_HIST_EDGES, v)] += 1
+    return counts
+
+
+def _snr_stats(values: list[float]) -> dict:
+    """Return min, max, avg, and histogram counts for a list of SNR values."""
+    if not values:
+        return {}
+    return {
+        "min": min(values),
+        "max": max(values),
+        "avg": sum(values) / len(values),
+        "hist": _snr_histogram(values),
+    }
+
+
+def _edge_snr_properties(
+    out_values: list[float],
+    in_values: list[float],
+    has_out: bool,
+    has_in: bool,
+) -> dict:
+    """Build directional SNR properties for an edge feature.
+
+    Returns a dict with ``out_snr_*`` and/or ``in_snr_*`` keys depending on
+    which directions are populated, plus ``snr_color`` based on the pessimistic
+    (worse) average.
+    """
+    props: dict = {}
+    out_stats: Optional[dict] = None
+    in_stats: Optional[dict] = None
+
+    if has_out and out_values:
+        out_stats = _snr_stats(out_values)
+        props["out_snr_min"] = out_stats["min"]
+        props["out_snr_max"] = out_stats["max"]
+        props["out_snr_avg"] = out_stats["avg"]
+        props["out_snr_hist"] = out_stats["hist"]
+    if has_in and in_values:
+        in_stats = _snr_stats(in_values)
+        props["in_snr_min"] = in_stats["min"]
+        props["in_snr_max"] = in_stats["max"]
+        props["in_snr_avg"] = in_stats["avg"]
+        props["in_snr_hist"] = in_stats["hist"]
+
+    # Pessimistic color: use whichever direction has the worse average.
+    candidates = []
+    if out_stats is not None:
+        candidates.append(out_stats["avg"])
+    if in_stats is not None:
+        candidates.append(in_stats["avg"])
+    color_snr = min(candidates) if candidates else None
+    props["snr_color"] = _snr_color(color_snr)
+
+    return props
+
+
 def build_network_geojson(
     conn: sqlite3.Connection,
     start_ts: Optional[int] = None,
@@ -318,20 +383,20 @@ def build_network_geojson(
                     g = {
                         "a": key[0],
                         "b": key[1],
-                        "ab_snr_values": [],
-                        "ba_snr_values": [],
-                        "ab_count": 0,
-                        "ba_count": 0,
+                        "out_snr_values": [],
+                        "in_snr_values": [],
+                        "out_count": 0,
+                        "in_count": 0,
                     }
                     edge_groups[key] = g
                 if start == key[0]:
                     if row["snr"] is not None:
-                        g["ab_snr_values"].append(float(row["snr"]))
-                    g["ab_count"] += 1
+                        g["out_snr_values"].append(float(row["snr"]))
+                    g["out_count"] += 1
                 else:
                     if row["snr"] is not None:
-                        g["ba_snr_values"].append(float(row["snr"]))
-                    g["ba_count"] += 1
+                        g["in_snr_values"].append(float(row["snr"]))
+                    g["in_count"] += 1
 
         # Unknown hop placement: midpoint of bounding known nodes
         unknown_hop_positions: dict[str, tuple[float, float]] = {}
@@ -352,23 +417,25 @@ def build_network_geojson(
             a, b = key
             if a not in resolved or b not in resolved:
                 continue
-            has_ab = g["ab_count"] > 0
-            has_ba = g["ba_count"] > 0
-            if has_ab and has_ba:
+            has_out = g["out_count"] > 0
+            has_in = g["in_count"] > 0
+            if has_out and has_in:
                 edge_direction = "both"
-                snr_values = g["ab_snr_values"] + g["ba_snr_values"]
-                link_count = g["ab_count"] + g["ba_count"]
-            elif has_ab:
+                link_count = g["out_count"] + g["in_count"]
+            elif has_out:
                 edge_direction = "out"
-                snr_values = g["ab_snr_values"]
-                link_count = g["ab_count"]
+                link_count = g["out_count"]
             else:
                 edge_direction = "in"
-                snr_values = g["ba_snr_values"]
-                link_count = g["ba_count"]
-            snr = sum(snr_values) / len(snr_values) if snr_values else None
+                link_count = g["in_count"]
             a_lonlat = resolved[a]
             b_lonlat = resolved[b]
+            snr_props = _edge_snr_properties(
+                g["out_snr_values"],
+                g["in_snr_values"],
+                has_out,
+                has_in,
+            )
             edge_features.append(
                 _edge_to_feature(
                     a_lonlat,
@@ -378,10 +445,11 @@ def build_network_geojson(
                         "link_end": b,
                         "link_start_label": node_id_format(a),
                         "link_end_label": node_id_format(b),
-                        "snr": snr,
-                        "snr_color": _snr_color(snr),
                         "direction": edge_direction,
                         "link_count": link_count,
+                        "out_link_count": g["out_count"],
+                        "in_link_count": g["in_count"],
+                        **snr_props,
                     },
                 )
             )
@@ -402,8 +470,7 @@ def build_network_geojson(
                     end_lonlat = unknown_hop_positions.get(str(start) + "-" + str(end))
                 if start_lonlat is None or end_lonlat is None:
                     continue
-                snr_values = g["snr_values"]
-                snr = sum(snr_values) / len(snr_values) if snr_values else None
+                snr_props = _edge_snr_properties(g["snr_values"], [], True, False)
                 edge_features.append(
                     _edge_to_feature(
                         start_lonlat,
@@ -417,11 +484,12 @@ def build_network_geojson(
                             "link_end_label": node_id_format(end)
                             if isinstance(end, int)
                             else str(end),
-                            "snr": snr,
-                            "snr_color": _snr_color(snr),
                             "direction": "out",
                             "link_count": g["link_count"],
+                            "out_link_count": g["link_count"],
+                            "in_link_count": 0,
                             "is_unknown_hop": True,
+                            **snr_props,
                         },
                     )
                 )
@@ -590,22 +658,24 @@ def build_trace_geojson(
             has_in = g["in_count"] > 0
             if has_out and has_in:
                 direction = "both"
-                snr_values = g["out_snr_values"] + g["in_snr_values"]
                 link_count = g["out_count"] + g["in_count"]
                 is_fast_path = g["out_fast_path"] or g["in_fast_path"]
             elif has_out:
                 direction = "out"
-                snr_values = g["out_snr_values"]
                 link_count = g["out_count"]
                 is_fast_path = g["out_fast_path"]
             else:
                 direction = "in"
-                snr_values = g["in_snr_values"]
                 link_count = g["in_count"]
                 is_fast_path = g["in_fast_path"]
-            snr = sum(snr_values) / len(snr_values) if snr_values else None
             a_lonlat = resolved[a]
             b_lonlat = resolved[b]
+            snr_props = _edge_snr_properties(
+                g["out_snr_values"],
+                g["in_snr_values"],
+                has_out,
+                has_in,
+            )
             edge_features.append(
                 _edge_to_feature(
                     a_lonlat,
@@ -615,13 +685,14 @@ def build_trace_geojson(
                         "link_end": b,
                         "link_start_label": node_id_format(a),
                         "link_end_label": node_id_format(b),
-                        "snr": snr,
-                        "snr_color": _snr_color(snr),
                         "direction": direction,
                         "is_fast_path": is_fast_path,
                         "route_len": g["max_route_len"],
                         "is_overflow": g["is_overflow"],
                         "link_count": link_count,
+                        "out_link_count": g["out_count"],
+                        "in_link_count": g["in_count"],
+                        **snr_props,
                     },
                 )
             )
@@ -668,14 +739,16 @@ def build_trace_geojson(
             has_in = g["in_count"] > 0
             if has_out and has_in:
                 direction = "both"
-                snr_values = g["out_snr_values"] + g["in_snr_values"]
             elif has_out:
                 direction = "out"
-                snr_values = g["out_snr_values"]
             else:
                 direction = "in"
-                snr_values = g["in_snr_values"]
-            snr = sum(snr_values) / len(snr_values) if snr_values else None
+            snr_props = _edge_snr_properties(
+                g["out_snr_values"],
+                g["in_snr_values"],
+                has_out,
+                has_in,
+            )
             edge_features.append(
                 _edge_to_feature(
                     midpoint,
@@ -685,11 +758,12 @@ def build_trace_geojson(
                         "link_end": end if isinstance(end, int) else str(end),
                         "link_start_label": str(start),
                         "link_end_label": str(end),
-                        "snr": snr,
-                        "snr_color": _snr_color(snr),
                         "direction": direction,
                         "is_fast_path": False,
                         "is_unknown_hop": True,
+                        "out_link_count": g["out_count"],
+                        "in_link_count": g["in_count"],
+                        **snr_props,
                     },
                 )
             )
@@ -868,32 +942,41 @@ def build_node_geojson(
             has_in = g["in_count"] > 0
             if has_out and has_in:
                 edge_direction = "both"
-                snr_values = g["out_snr_values"] + g["in_snr_values"]
                 link_count = g["out_count"] + g["in_count"]
             elif has_out:
                 edge_direction = "out"
-                snr_values = g["out_snr_values"]
                 link_count = g["out_count"]
             else:
                 edge_direction = "in"
-                snr_values = g["in_snr_values"]
                 link_count = g["in_count"]
-            snr = sum(snr_values) / len(snr_values) if snr_values else None
             a_lonlat = resolved[a]
             b_lonlat = resolved[b]
+            if node_id == b:
+                start_id, end_id = b, a
+                start_lonlat, end_lonlat = b_lonlat, a_lonlat
+            else:
+                start_id, end_id = a, b
+                start_lonlat, end_lonlat = a_lonlat, b_lonlat
+            snr_props = _edge_snr_properties(
+                g["out_snr_values"],
+                g["in_snr_values"],
+                has_out,
+                has_in,
+            )
             edge_features.append(
                 _edge_to_feature(
-                    a_lonlat,
-                    b_lonlat,
+                    start_lonlat,
+                    end_lonlat,
                     {
-                        "link_start": a,
-                        "link_end": b,
-                        "link_start_label": node_id_format(a),
-                        "link_end_label": node_id_format(b),
-                        "snr": snr,
-                        "snr_color": _snr_color(snr),
+                        "link_start": start_id,
+                        "link_end": end_id,
+                        "link_start_label": node_id_format(start_id),
+                        "link_end_label": node_id_format(end_id),
                         "direction": edge_direction,
                         "link_count": link_count,
+                        "out_link_count": g["out_count"],
+                        "in_link_count": g["in_count"],
+                        **snr_props,
                     },
                 )
             )

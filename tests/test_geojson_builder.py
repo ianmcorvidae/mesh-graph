@@ -91,7 +91,10 @@ def test_build_network_geojson_basic(db):
     assert edge["geometry"]["type"] == "LineString"
     assert edge["properties"]["link_start"] == NODE_A
     assert edge["properties"]["link_end"] == NODE_B
-    assert edge["properties"]["snr"] == 5.0
+    assert edge["properties"]["out_snr_avg"] == 5.0
+    assert edge["properties"]["out_snr_min"] == 5.0
+    assert edge["properties"]["out_snr_max"] == 5.0
+    assert "out_snr_hist" in edge["properties"]
 
 
 def test_build_network_geojson_approximates_positionless_node(db):
