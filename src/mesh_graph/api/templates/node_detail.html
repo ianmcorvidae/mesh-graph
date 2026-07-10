@@ -35,11 +35,22 @@
     </label>
   </div>
 
-  <div class="graph-container" :class="{ loading: loading }">
+  <div class="view-toggle">
+    <button @click="setViewMode('graph')" :class="{ active: viewMode === 'graph' }">Graph</button>
+    <button @click="setViewMode('map')" :class="{ active: viewMode === 'map' }">Map</button>
+  </div>
+
+  <div class="graph-container" :class="{ loading: loading }" x-show="viewMode === 'graph'">
     <div x-show="loading" class="spinner"></div>
     <object :data="graphUrl" type="image/svg+xml"
             @load="loading = false" @error="loading = false"
             x-show="!loading" x-cloak></object>
+  </div>
+
+  <div x-show="viewMode === 'map'" x-cloak>
+    {% with map_id='node-map', geojson_url=geojson_url, page_type='node' %}
+      {% include "partials/map.html" %}
+    {% endwith %}
   </div>
 
   <div class="section">
@@ -126,6 +137,7 @@ function nodeControls() {
     start: hasTimeInUrl ? utcToLocal(p.get('start')) : utcToLocal('{{ default_start }}'),
     end: hasTimeInUrl ? utcToLocal(p.get('end')) : utcToLocal('{{ default_end }}'),
     userSetTime: hasTimeInUrl,
+    viewMode: p.get('view') === 'map' ? 'map' : 'graph',
     loading: false,
     sortKey: 'link_count',
     sortDir: 'desc',
@@ -161,12 +173,30 @@ function nodeControls() {
       q.set('end', localToUtc(this.end));
       return '/graph/node/' + nodeId + '?' + q;
     },
+    get mapUrl() {
+      const q = new URLSearchParams();
+      q.set('depth', this.depth);
+      q.set('direction', this.direction);
+      q.set('start', localToUtc(this.start));
+      q.set('end', localToUtc(this.end));
+      return '/api/geojson/node/' + nodeId + '?' + q;
+    },
+    setViewMode(mode) {
+      this.viewMode = mode;
+      this.onChange();
+      if (mode === 'map') {
+        this.$dispatch('meshmap-init', { mapId: 'node-map', url: this.mapUrl });
+      }
+      if (mode === 'graph') {
+        this.loading = false;
+      }
+    },
     onTimeChange() {
       this.userSetTime = true;
       this.onChange();
     },
     onChange() {
-      this.loading = true;
+      if (this.viewMode === 'graph') this.loading = true;
       const u = new URL(window.location);
       if (this.userSetTime) {
         u.searchParams.set('start', localToUtc(this.start));
@@ -178,10 +208,14 @@ function nodeControls() {
       for (const [k, v] of Object.entries({
         depth: this.depth,
         direction: this.direction,
+        view: this.viewMode === 'map' ? 'map' : '',
       })) {
         if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
       }
       history.pushState({}, '', u);
+      if (this.viewMode === 'map') {
+        this.$dispatch('map-url-changed', { mapId: 'node-map', url: this.mapUrl });
+      }
     },
     init() {
       if (this.userSetTime) return;

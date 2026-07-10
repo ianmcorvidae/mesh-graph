@@ -28,6 +28,10 @@ def insert_link(
     route_len=None,
     ts=None,
     first_seen_ts=None,
+    link_start_position_id=None,
+    link_end_position_id=None,
+    link_start_position_received_ts=None,
+    link_end_position_received_ts=None,
 ):
     now = int(time.time())
     ts = ts if ts is not None else now
@@ -39,8 +43,10 @@ def insert_link(
         )
         db.execute(
             "INSERT OR IGNORE INTO traceroute_link "
-            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path, route_len) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "(trace_id, from_id, to_id, ts, link_start, link_end, snr, is_reply, is_fast_path, "
+            "route_len, link_start_position_id, link_end_position_id, "
+            "link_start_position_received_ts, link_end_position_received_ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 trace_id,
                 from_id,
@@ -52,5 +58,9 @@ def insert_link(
                 is_reply,
                 is_fast_path,
                 route_len,
+                link_start_position_id,
+                link_end_position_id,
+                link_start_position_received_ts,
+                link_end_position_received_ts,
             ),
         )

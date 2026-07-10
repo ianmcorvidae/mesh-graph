@@ -34,6 +34,22 @@ def _default_time_bounds() -> tuple[str, str]:
     return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _geojson_url(request: Request, endpoint: str, defaults: dict) -> str:
+    """Build a GeoJSON API URL from current query params, falling back to defaults."""
+    params = dict(request.query_params)
+    q = []
+    for key, default in defaults.items():
+        value = params.get(key, default)
+        if value:
+            q.append(f"{key}={value}")
+    if endpoint.startswith("/api/geojson/network"):
+        if params.get("include_clients") == "true":
+            q.append("include_clients=true")
+        if params.get("include_unknown_nodes") == "true":
+            q.append("include_unknown_nodes=true")
+    return f"{endpoint}?{'&'.join(q)}"
+
+
 def format_ts(ts: Optional[int]) -> str:
     if ts is None:
         return ""
@@ -153,10 +169,19 @@ def dashboard(request: Request):
 @router.get("/network", response_class=HTMLResponse)
 def network_page(request: Request):
     default_start, default_end = _default_time_bounds()
+    geojson_url = _geojson_url(
+        request,
+        "/api/geojson/network",
+        {"start": default_start, "end": default_end},
+    )
     return templates.TemplateResponse(
         request,
         "network.html",
-        {"default_start": default_start, "default_end": default_end},
+        {
+            "default_start": default_start,
+            "default_end": default_end,
+            "geojson_url": geojson_url,
+        },
     )
 
 
@@ -216,6 +241,11 @@ def node_detail(
     default_start, default_end = _default_time_bounds()
     start_ts, end_ts = parse_time_bounds(default_start, default_end)
     connections = _group_node_connections(db, nid, start_ts=start_ts, end_ts=end_ts)
+    geojson_url = _geojson_url(
+        request,
+        f"/api/geojson/node/{node_id_str(nid)}",
+        {"start": default_start, "end": default_end, "direction": "both", "depth": "1"},
+    )
 
     return templates.TemplateResponse(
         request,
@@ -228,6 +258,7 @@ def node_detail(
             "connections": connections,
             "default_start": default_start,
             "default_end": default_end,
+            "geojson_url": geojson_url,
         },
     )
 
@@ -313,6 +344,11 @@ def traceroute_detail(
     trace_links = _enrich_trace_links(
         [dict(r) for r in get_links_for_trace(db, trace_id=trace_id, limit=500)]
     )
+    geojson_url = _geojson_url(
+        request,
+        f"/api/geojson/trace/{trace_id}",
+        {"direction": "both"},
+    )
 
     return templates.TemplateResponse(
         request,
@@ -321,5 +357,6 @@ def traceroute_detail(
             "trace_id": trace_id,
             "trace_info": dict(trace_info),
             "trace_links": trace_links,
+            "geojson_url": geojson_url,
         },
     )

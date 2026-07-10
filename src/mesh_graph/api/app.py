@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from starlette.staticfiles import StaticFiles
 from starlette_compress import CompressMiddleware
 
+from mesh_graph.api.cache import TTLCache, cache_key
 from mesh_graph.api.models import NodeOut, TracerouteOut
 from mesh_graph.config import ObservabilityConfig
 from mesh_graph.db import (
@@ -27,59 +28,6 @@ from mesh_graph.graph.builder import (
 from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
 from mesh_graph.utils import parse_iso, parse_time_bounds
-
-
-class _GraphCache:
-    """Simple TTL cache for rendered graph bytes.
-
-    Entries are keyed by a string that encodes all request parameters
-    plus (for trace & depth-1 node graphs) a data version token from
-    ``SELECT MAX(ts)``.  The TTL is therefore used only for eventual
-    eviction, not for correctness — a changed version token produces a
-    different key and forces a fresh render.
-    """
-
-    def __init__(self, maxsize: int = 1000):
-        self._maxsize = maxsize
-        self._data: dict[str, tuple[float, bytes]] = {}
-
-    def get(self, key: str) -> Optional[bytes]:
-        now = time.time()
-        entry = self._data.get(key)
-        if entry is None:
-            return None
-        expires_at, data = entry
-        if now >= expires_at:
-            del self._data[key]
-            return None
-        return data
-
-    def set(self, key: str, data: bytes, ttl: float) -> None:
-        self._data[key] = (time.time() + ttl, data)
-        if len(self._data) > self._maxsize:
-            self._evict()
-
-    def __len__(self) -> int:
-        return len(self._data)
-
-    def clear(self) -> None:
-        self._data.clear()
-
-    def _evict(self) -> None:
-        now = time.time()
-        stale = [k for k, (exp, _) in self._data.items() if now >= exp]
-        for k in stale:
-            del self._data[k]
-        if len(self._data) > self._maxsize:
-            sorted_entries = sorted(self._data.keys(), key=lambda k: self._data[k][0])
-            for k in sorted_entries[: len(self._data) - self._maxsize]:
-                del self._data[k]
-
-
-def _cache_key(**parts) -> str:
-    """Deterministic cache-key string from keyword arguments."""
-    return "|".join(f"{k}={v}" for k, v in sorted(parts.items()))
-
 
 _MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "dot": "text/vnd.graphviz"}
 _NETWORK_GRAPH_QUERY_PARAMS = {
@@ -127,9 +75,9 @@ def _reject_unknown_query_params(request: Request, allowed_params: set[str]) -> 
 
 def _build_and_render(
     db: sqlite3.Connection,
-    cache: _GraphCache,
+    cache: TTLCache,
     build_fn,
-    cache_key: str,
+    key: str,
     cache_ttl: int,
     format: str,
     layout_prog: str,
@@ -142,7 +90,7 @@ def _build_and_render(
     build function returns ``None`` (e.g. trace not found).
     """
     with traced_span("cache.lookup", warn_ms=5) as span:
-        cached = cache.get(cache_key)
+        cached = cache.get(key)
         span.set_attribute("cache.hit", cached is not None)
     if cached is not None:
         return Response(content=cached, media_type=_MEDIA_TYPES[format])
@@ -159,7 +107,7 @@ def _build_and_render(
     ) as span:
         content = render(G, format, layout_prog=layout_prog)
         span.set_attribute("output.bytes", len(content))
-    cache.set(cache_key, content, ttl=cache_ttl)
+    cache.set(key, content, ttl=cache_ttl)
     return Response(content=content, media_type=_MEDIA_TYPES[format])
 
 
@@ -170,9 +118,14 @@ def create_app(
     app.add_middleware(CompressMiddleware, minimum_size=500)
     if observability_cfg and observability_cfg.enabled:
         instrument_fastapi(app)
-    _cache = _GraphCache()
+    _cache = TTLCache()
     app.state.db = db
     app.state._graph_cache = _cache
+    app.state._geojson_cache = TTLCache()
+
+    from mesh_graph.api.geo import router as geo_router
+
+    app.include_router(geo_router)
 
     @app.get("/graph/network")
     def graph_network(
@@ -208,7 +161,7 @@ def create_app(
             with traced_span("cache.version_query", warn_ms=10):
                 max_ts = get_max_link_ts(db, start_ts=start_ts, end_ts=end_ts)
 
-            ck = _cache_key(
+            ck = cache_key(
                 endpoint="network",
                 start_ts=start_ts,
                 end_is_past=end_is_past,
@@ -289,7 +242,7 @@ def create_app(
             with traced_span("cache.version_query", warn_ms=10):
                 max_ts = get_max_ts_for_trace(db, trace_id)
 
-            ck = _cache_key(
+            ck = cache_key(
                 endpoint="trace",
                 trace_id=trace_id,
                 from_id=from_id,
@@ -355,7 +308,7 @@ def create_app(
             if use_version_key:
                 with traced_span("cache.version_query", warn_ms=10):
                     max_ts = get_max_link_ts_for_node(db, nid, start_ts=start_ts, end_ts=end_ts)
-                ck = _cache_key(
+                ck = cache_key(
                     endpoint="node",
                     nid=nid,
                     start_ts=start_ts,
@@ -369,7 +322,7 @@ def create_app(
                 )
                 cache_ttl = 3600
             else:
-                ck = _cache_key(
+                ck = cache_key(
                     endpoint="node",
                     nid=nid,
                     start_ts=start_ts,

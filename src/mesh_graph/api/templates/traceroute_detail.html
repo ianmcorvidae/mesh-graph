@@ -24,11 +24,22 @@
     </label>
   </div>
 
-  <div class="graph-container" :class="{ loading: loading }">
+  <div class="view-toggle">
+    <button @click="setViewMode('graph')" :class="{ active: viewMode === 'graph' }">Graph</button>
+    <button @click="setViewMode('map')" :class="{ active: viewMode === 'map' }">Map</button>
+  </div>
+
+  <div class="graph-container" :class="{ loading: loading }" x-show="viewMode === 'graph'">
     <div x-show="loading" class="spinner"></div>
     <object :data="graphUrl" type="image/svg+xml"
             @load="loading = false" @error="loading = false"
             x-show="!loading" x-cloak></object>
+  </div>
+
+  <div x-show="viewMode === 'map'" x-cloak>
+    {% with map_id='trace-map', geojson_url=geojson_url, page_type='trace' %}
+      {% include "partials/map.html" %}
+    {% endwith %}
   </div>
 
   <div class="section">
@@ -94,6 +105,7 @@ function traceControls() {
   return {
     direction: p.get('direction') || 'both',
     communities: p.get('communities') === 'true',
+    viewMode: p.get('view') === 'map' ? 'map' : 'graph',
     loading: false,
     fastPathOnly: false,
     sortKey: 'ts',
@@ -133,12 +145,35 @@ function traceControls() {
       q.set('communities', this.communities ? 'true' : 'false');
       return '/graph/trace/' + traceId + '?' + q;
     },
+    get mapUrl() {
+      const q = new URLSearchParams();
+      q.set('direction', this.direction);
+      return '/api/geojson/trace/' + traceId + '?' + q;
+    },
+    setViewMode(mode) {
+      this.viewMode = mode;
+      this.onChange();
+      if (mode === 'map') {
+        this.$dispatch('meshmap-init', { mapId: 'trace-map', url: this.mapUrl });
+      }
+      if (mode === 'graph') {
+        this.loading = false;
+      }
+    },
     onChange() {
-      this.loading = true;
+      if (this.viewMode === 'graph') this.loading = true;
       const u = new URL(window.location);
       u.searchParams.set('direction', this.direction);
       u.searchParams.set('communities', this.communities ? 'true' : 'false');
+      if (this.viewMode === 'map') {
+        u.searchParams.set('view', 'map');
+      } else {
+        u.searchParams.delete('view');
+      }
       history.pushState({}, '', u);
+      if (this.viewMode === 'map') {
+        this.$dispatch('map-url-changed', { mapId: 'trace-map', url: this.mapUrl });
+      }
     }
   }
 }

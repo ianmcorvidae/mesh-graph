@@ -1,0 +1,209 @@
+<div x-data="meshMap('{{ map_id }}', '{{ geojson_url }}', '{{ page_type }}')" x-init="init()">
+  <div class="map-controls">
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="showNodes" @change="setLayerVisibility()">
+      Nodes
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="showEdges" @change="setLayerVisibility()">
+      Edges
+    </label>
+    {% if page_type == 'trace' %}
+    <label class="checkbox-label">
+      <input type="checkbox" x-model="fastPathOnly" @change="updateFastPathFilter()">
+      Fast path only
+    </label>
+    {% endif %}
+  </div>
+  <div id="{{ map_id }}" class="map-container"></div>
+</div>
+
+<script>
+function meshMap(mapId, geojsonUrl, pageType) {
+  return {
+    map: null,
+    showNodes: true,
+    showEdges: true,
+    fastPathOnly: false,
+    loaded: false,
+    init() {
+      var self = this;
+      var container = document.getElementById(mapId);
+      var map = new maplibregl.Map({
+        container: mapId,
+        style: 'https://tiles.openfreemap.org/styles/liberty',
+        attributionControl: true
+      });
+      self.map = map;
+      map.on('load', function() {
+        self.loadGeoJSON(geojsonUrl);
+      });
+      window.addEventListener('meshmap-init', function(e) {
+        if (e.detail && e.detail.mapId === mapId) {
+          geojsonUrl = e.detail.url;
+          if (self.loaded) {
+            self.loadGeoJSON(geojsonUrl);
+          }
+        }
+      });
+      window.addEventListener('map-url-changed', function(e) {
+        if (e.detail && e.detail.mapId === mapId && e.detail.url) {
+          geojsonUrl = e.detail.url;
+          if (self.loaded) {
+            self.loadGeoJSON(geojsonUrl);
+          }
+        }
+      });
+    },
+    updateFastPathFilter() {
+      if (!this.map) return;
+      var edgeFilter = this.fastPathOnly
+        ? ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'is_fast_path'], true]]
+        : ['==', ['get', 'layer'], 'edge'];
+      var nodeFilter = this.fastPathOnly
+        ? ['all', ['==', ['get', 'layer'], 'node'], ['==', ['get', 'is_fast_path'], true]]
+        : ['==', ['get', 'layer'], 'node'];
+      ['edges-out', 'edges-in', 'edges-both'].forEach(function(id) {
+        if (this.map.getLayer(id)) {
+          this.map.setFilter(id, edgeFilter);
+        }
+      }, this);
+      if (this.map.getLayer('nodes')) {
+        this.map.setFilter('nodes', nodeFilter);
+      }
+    },
+    loadGeoJSON(url) {
+      var self = this;
+      var fetchUrl = url || geojsonUrl;
+      if (!self.map) return;
+      fetch(fetchUrl)
+        .then(function(r) { if (!r.ok) throw new Error('GeoJSON fetch failed'); return r.json(); })
+        .then(function(data) {
+          if (self.map.getSource('geojson')) {
+            self.map.getSource('geojson').setData(data);
+          } else {
+            self.map.addSource('geojson', { type: 'geojson', data: data });
+            self.addLayers();
+          }
+          self.fitBounds(data);
+          setTimeout(function() { self.map.resize(); }, 0);
+          self.loaded = true;
+        })
+        .catch(function(err) {
+          console.error('Failed to load GeoJSON:', err);
+        });
+    },
+    addLayers() {
+      var self = this;
+      var nodeColor = ['get', 'color'];
+      var edgeColor = ['get', 'snr_color'];
+      var edgeWidth = pageType === 'node' ? 2 : ['case', ['get', 'is_fast_path'], 5, 2];
+
+      self.map.addLayer({
+        id: 'edges-out',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'out']],
+        paint: { 'line-color': edgeColor, 'line-width': edgeWidth }
+      });
+      self.map.addLayer({
+        id: 'edges-in',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'in']],
+        paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [3, 3] }
+      });
+      self.map.addLayer({
+        id: 'edges-both',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'both']],
+        paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [5, 1, 1, 1] }
+      });
+
+      self.map.addLayer({
+        id: 'nodes',
+        type: 'circle',
+        source: 'geojson',
+        filter: ['==', ['get', 'layer'], 'node'],
+        paint: {
+          'circle-color': nodeColor,
+          'circle-radius': ['case', ['get', 'is_center'], 12, ['get', 'is_source'], 10, ['get', 'is_dest'], 10, 7],
+          'circle-opacity': ['case', ['get', 'is_approximated'], 0.6, 0.9],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+
+      self.map.on('click', 'nodes', function(e) {
+        var f = e.features[0];
+        var props = f.properties;
+        var lines = [
+          '<strong>' + (props.short_name || props.node_id) + '</strong>',
+          'ID: ' + props.node_id,
+          'Role: ' + props.role
+        ];
+        if (props.is_source) lines.push('Source of traceroute');
+        if (props.is_dest) lines.push('Destination of traceroute');
+        if (props.is_center) lines.push('Center node');
+        if (props.is_fast_path) lines.push('On fast path');
+        if (props.is_approximated) lines.push('<em>approximated position</em>');
+        new maplibregl.Popup().setLngLat(f.geometry.coordinates).setHTML(lines.join('<br>')).addTo(self.map);
+      });
+
+      self.map.on('click', 'edges-out', function(e) { self._showEdgePopup(e); });
+      self.map.on('click', 'edges-in', function(e) { self._showEdgePopup(e); });
+      self.map.on('click', 'edges-both', function(e) { self._showEdgePopup(e); });
+
+      self.map.on('mouseenter', 'nodes', function() { self.map.getCanvas().style.cursor = 'pointer'; });
+      self.map.on('mouseleave', 'nodes', function() { self.map.getCanvas().style.cursor = ''; });
+      ['edges-out', 'edges-in', 'edges-both'].forEach(function(id) {
+        self.map.on('mouseenter', id, function() { self.map.getCanvas().style.cursor = 'pointer'; });
+        self.map.on('mouseleave', id, function() { self.map.getCanvas().style.cursor = ''; });
+      });
+    },
+    _showEdgePopup(e) {
+      var f = e.features[0];
+      var props = f.properties;
+      var dir_label = { out: 'outbound', in: 'inbound', both: 'bidirectional' };
+      var lines = [
+        '<strong>' + (props.link_start_label || props.link_start) + ' \u2192 ' + (props.link_end_label || props.link_end) + '</strong>',
+        'SNR: ' + (props.snr != null ? props.snr + ' dB' : '? dB'),
+        'Direction: ' + (dir_label[props.direction] || props.direction)
+      ];
+      if (props.is_fast_path) lines.push('Fast path');
+      if (props.link_count > 1) lines.push('Links aggregated: ' + props.link_count);
+      if (props.route_len) lines.push('Route length: ' + props.route_len);
+      if (props.is_overflow === true || props.is_overflow === 'true') lines.push('Route overflow (\u22658 hops)');
+      if (props.is_unknown_hop) lines.push('Unknown hop');
+      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(lines.join('<br>')).addTo(this.map);
+    },
+    setLayerVisibility() {
+      if (!this.map) return;
+      this.map.setLayoutProperty('nodes', 'visibility', this.showNodes ? 'visible' : 'none');
+      var edgeLayers = ['edges-out', 'edges-in', 'edges-both'];
+      edgeLayers.forEach(function(id) {
+        if (this.map.getLayer(id)) {
+          this.map.setLayoutProperty(id, 'visibility', this.showEdges ? 'visible' : 'none');
+        }
+      }, this);
+    },
+    fitBounds(data) {
+      var coords = [];
+      data.features.forEach(function(f) {
+        var geom = f.geometry;
+        if (geom.type === 'Point') {
+          coords.push(geom.coordinates);
+        } else if (geom.type === 'LineString') {
+          geom.coordinates.forEach(function(c) { coords.push(c); });
+        }
+      });
+      if (coords.length === 0) return;
+      var bounds = coords.reduce(function(b, c) {
+        return b.extend(c);
+      }, new maplibregl.LngLatBounds(coords[0], coords[0]));
+      this.map.fitBounds(bounds, { padding: 40, maxZoom: 15 });
+    }
+  };
+}
+</script>
