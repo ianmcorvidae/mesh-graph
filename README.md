@@ -1,7 +1,7 @@
 # mesh-graph
 
-Listens for Meshtastic traceroute packets over MQTT and exposes on-demand
-network topology graphs via an HTTP API.
+Listens for Meshtastic traceroute packets over MQTT and exposes network
+topology graphs via an HTTP API and web UI.
 
 ## Requirements
 
@@ -12,127 +12,53 @@ network topology graphs via an HTTP API.
 ## Installation
 
 ```sh
-uv sync
-```
-
-For development (includes pytest, httpx, ruff, pre-commit, etc.):
-
-```sh
-uv sync --extra dev
-```
-
-Install commit hooks:
-
-```sh
-uv run pre-commit install
-```
-
-Run the same lint/format **checks** used by pre-commit:
-
-```sh
-uv run pre-commit run --all-files
-```
-
-Apply lint/format fixes manually:
-
-```sh
-uv run ruff check --fix .
-uv run ruff format .
+uv sync                   # install
+uv sync --extra dev       # with dev dependencies (pytest, httpx, ruff, pre-commit)
+uv run pre-commit install # install commit hooks
 ```
 
 ## Configuration
 
-Copy `config.toml.example` to `config.toml` and fill in your broker details:
+Copy `config.toml.example` to `config.toml` and set your MQTT broker, topic, and
+encryption key. The full set of options with defaults is documented in the
+example file.
 
 ```toml
 [mqtt]
 broker = "mqtt.example.com"
-port = 1883
-username = ""
-password = ""
 topic = "msh/#"
-encryption_key = "1PG7OiApB1nwvP+rz05pAQ=="
-
-[api]
-host = "0.0.0.0"
-port = 8080
-
-[db]
-path = "trace-graph.db"
-
-[observability]
-enabled = false
-service_name = "mesh-graph"
-environment = "dev"
-exporter = "otlp" # "otlp" or "console"
-otlp_endpoint = "http://127.0.0.1:4317"
-sample_ratio = 1.0
+encryption_key = "1PG7OiApB1nwvP+rz05pAQ=="  # base64 AES key; default is the public Meshtastic key
 ```
-
-`encryption_key` is the base64-encoded AES key for the Meshtastic channel.
-The default value is the public default Meshtastic key.
 
 ## Observability (OpenTelemetry)
 
-The API can emit traces and metrics through OpenTelemetry.
-
-1. Start Jaeger:
+Start Jaeger, enable observability in config, then open `http://localhost:16686`:
 
 ```sh
 docker compose -f docker-compose.observability.yml up -d
 ```
 
-This compose file runs Jaeger all-in-one `2.18.0` (v2 configuration model).
-
-2. Enable observability in `config.toml`:
-
 ```toml
 [observability]
 enabled = true
-service_name = "mesh-graph"
-environment = "dev"
-exporter = "otlp"
+exporter = "otlp"       # or "console"
 otlp_endpoint = "http://127.0.0.1:4317"
-sample_ratio = 1.0
 ```
 
-3. Run the server and generate traffic, then open Jaeger UI at `http://localhost:16686`.
-
-The `/graph/*` endpoints include stage spans for time parsing, DB fetches, graph building, and Graphviz rendering.
-When using `exporter = "otlp"` with Jaeger, trace export is enabled; metrics are not exported to Jaeger.
+The `/graph/*` endpoints emit stage spans (parsing, DB, graph build, render).
 
 ## Running
 
 ```sh
-uv run mesh-graph --config config.toml
+uv run mesh-graph --config config.toml                              # both (default)
+uv run mesh-graph --config config.toml --mode ingestion             # MQTT only
+uv run mesh-graph --config config.toml --mode api                   # API only (needs existing DB)
 ```
-
-Or run as separate processes:
-
-```sh
-# Terminal 1: MQTT ingestion only
-uv run mesh-graph --config config.toml --mode ingestion
-
-# Terminal 2: API only (requires existing DB from ingestion)
-uv run mesh-graph --config config.toml --mode api
-```
-
-### Run Modes
-
-- `--mode both` (default): MQTT ingestion and HTTP API in a single process
-- `--mode ingestion`: MQTT data collection only (writes to DB)
-- `--mode api`: HTTP API server only (reads from DB)
 
 ## Container image
 
-This repository publishes a container image to GHCR on pushes to `main`:
-
-```sh
-ghcr.io/ianmcorvidae/mesh-graph:latest
-```
-
-The image uses `mesh-graph` as the entrypoint, so you can pass `--config` and
-`--mode` directly:
+Published to `ghcr.io/ianmcorvidae/mesh-graph:latest` on `main` pushes.
+The entrypoint is `mesh-graph`, so pass `--config` and `--mode` directly:
 
 ```sh
 docker run --rm \
@@ -142,20 +68,62 @@ docker run --rm \
   --mode api
 ```
 
-For SQLite data, mount `/data` and point `db.path` at something like
-`/data/trace-graph.db` in your config.
+Mount `/data` for SQLite persistence and point `db.path` at `/data/trace-graph.db`.
 
-## API
+## Web UI
 
-All graph endpoints accept `?format=svg` (default) or `?format=png`.
+A browser-based UI is available at the root URL. It uses HTMX + Alpine.js for
+interactivity with no build step.
 
-### Graphs
+| Page | Route | Description |
+|------|-------|-------------|
+| Dashboard | `GET /` | Stats, recent nodes, recent traceroutes, and live-updating 24h network graph |
+| Network | `GET /network` | Interactive network graph with time range, SNR labels, client/unknown toggles |
+| Nodes | `GET /nodes` | Searchable list of known nodes with HTMX-driven partial updates |
+| Node Detail | `GET /nodes/{node_id}` | Node info, neighborhood graph (with depth/direction/time controls), connection table, and recent traceroutes |
+| Traceroutes | `GET /traceroutes` | Filterable list of traceroutes (by `from`/`to`) with HTMX partials |
+| Traceroute Detail | `GET /traceroutes/{trace_id}` | Trace graph (direction/communities toggles) and sortable link table with fast-path filter |
+
+All graph pages render SVG inline via an `<object>` tag.
+
+## JSON API
+
+### Data
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/nodes` | JSON list of known nodes, ordered by `last_seen_ts` descending |
+| `GET /api/traceroutes` | JSON list of recent traceroutes, ordered by `first_seen_ts` descending |
+
+Both data endpoints support timestamp cursor pagination:
+
+```
+?after=1711920000&limit=100
+```
+
+- `after`: UNIX timestamp cursor (defaults to current time)
+- `limit`: max number of rows to return (`1..500`)
+
+`/api/traceroutes` also supports optional endpoint filters:
+
+```
+?from=!aabbccdd&to=!eeff0011
+```
+
+- `from`: expected source node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
+- `to`: expected destination node (same formats)
+
+### Graph endpoints
+
+All graph endpoints accept `?format=svg` (default), `?format=png`, or `?format=dot`.
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /graph/network` | Collapsed directional graph focused on backbone nodes (ROUTER, ROUTER_LATE, CLIENT_BASE) |
-| `GET /graph/trace/{trace_id}` | Graph for a single traceroute (most recent match by default), with uplink nodes labeled with relative receive times |
+| `GET /graph/trace/{trace_id}` | Graph for a single traceroute, with uplink nodes labeled with relative receive times |
 | `GET /graph/node/{node_id}` | Collapsed neighborhood graph around a specific node |
+
+All graph endpoints accept `?clickable=true` to generate SVG with clickable node links.
 
 `/graph/network` and `/graph/node/{node_id}` accept optional time-range filters:
 
@@ -180,19 +148,16 @@ When `include_clients=false`, `/graph/network` keeps only ROUTER/ROUTER_LATE/CLI
 `/graph/trace/{trace_id}` also accepts optional selectors when `trace_id` is not unique:
 
 ```
-?from=!aabbccdd&to=!eeff0011&date=2024-01-01T00:00:00Z&direction=both
+?from=!aabbccdd&to=!eeff0011&date=2024-01-01T00:00:00Z&direction=both&communities=0.5
 ```
 
 - `from`: expected origin node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
 - `to`: expected destination node (same formats)
 - `date`: approximate traceroute timestamp (ISO 8601); the closest match is selected
 - `direction`: `both` (default), `out` (non-reply links only), or `in` (reply links only)
+- `communities`: `false` (default, disabled), `true` (resolution 1.0), or a number to tune community detection
 
-When available, each node in the trace graph that matches an uplink gets an extra label line like:
-
-`Uplink: +4s`
-
-The first uplink observed for that trace instance is always the `+0s` baseline, and all other uplink times are shown relative to it.
+When available, trace graph nodes that match an uplink get a label like `Uplink: +4s` (relative to the first observed uplink at `+0s`).
 
 `/graph/node/{node_id}` supports traversal controls:
 
@@ -203,56 +168,20 @@ The first uplink observed for that trace instance is always the `+0s` baseline, 
 - `direction`: `inbound`, `outbound`, `both` (default), or `network`
 - `depth`: number of hops from the target node (`1..10`, default `1`)
 
-Node graph edges are collapsed per direction (one edge per node pair), use XOR-based link colors, and label the observed SNR range. This aggregation ignores whether the data came from outbound vs return traceroute paths.
-
-`direction=both` is the union of inbound and outbound *as separate parts*: overlapping nodes are split into `[in]` and `[out]` entries and each part keeps only links consistent with its direction. `direction=network` keeps the legacy mixed behavior (combined graph without splitting).
+Node graph edges are collapsed per direction (one edge per node pair) with XOR-based link colors and SNR range labels. `direction=both` splits overlapping nodes into `[in]`/`[out]` entries with direction-consistent links; `direction=network` keeps the legacy combined behavior.
 
 Node IDs use the Meshtastic `!xxxxxxxx` hex format, e.g. `/graph/node/!aabbccdd`.
-
-### Data
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /nodes` | JSON list of known nodes, ordered by `last_seen_ts` descending |
-| `GET /traceroutes` | JSON list of recent traceroutes, ordered by `first_seen_ts` descending |
-
-Both data endpoints support timestamp cursor pagination:
-
-```
-?after=1711920000&limit=100
-```
-
-- `after`: UNIX timestamp cursor (defaults to current time)
-- `limit`: max number of rows to return (`1..500`)
-
-`/traceroutes` also supports optional endpoint filters:
-
-```
-?from=!aabbccdd&to=!eeff0011
-```
-
-- `from`: expected source node (`!xxxxxxxx`, plain hex, `0x` hex, or decimal)
-- `to`: expected destination node (same formats)
 
 ### Examples
 
 ```sh
-# Save current network graph as SVG (default)
-curl http://localhost:8080/graph/network -o network.svg
-
-# Save network graph as SVG (collapsed links)
-curl "http://localhost:8080/graph/network?format=svg" -o network.svg
-
-# Include SNR labels on network graph
+# Network graph with SNR labels
 curl "http://localhost:8080/graph/network?format=svg&snr_labels=true" -o network-labeled.svg
 
 # Include client nodes in network graph
 curl "http://localhost:8080/graph/network?format=svg&include_clients=true" -o network-with-clients.svg
 
-# SVG of all routes through a specific node
-curl "http://localhost:8080/graph/node/!aabbccdd?format=svg" -o node.svg
-
-# Outbound neighborhood up to 2 hops from a node
+# Node neighborhood, outbound, 2 hops deep
 curl "http://localhost:8080/graph/node/!aabbccdd?format=svg&direction=outbound&depth=2" -o node-outbound.svg
 
 # Trace graph disambiguated by endpoint pair and approximate date
@@ -274,16 +203,31 @@ uv run pytest
 src/mesh_graph/
   config.py          # Config loading (TOML)
   db.py              # SQLite schema and query helpers
-  ingestion/
-    base.py          # DataSource abstract base class
-    mqtt.py          # MQTT ingestion implementation
-  graph/
-    builder.py       # NetworkX graph construction
-    renderer.py      # PNG/SVG rendering
+  main.py            # Entry point
+  observability.py   # OpenTelemetry setup
+  utils.py           # ID formatting, time parsing
   api/
     app.py           # FastAPI application
     models.py        # Pydantic response models
-  main.py            # Entry point
+    ui.py            # Web UI routes (Jinja2/HTMX/Alpine.js)
+    static/
+      style.css      # UI stylesheet
+    templates/
+      base.html                 # Layout with nav, HTMX & Alpine.js
+      dashboard.html            # Dashboard page
+      network.html              # Network graph page
+      nodes_list.html           # Nodes list page
+      node_detail.html          # Node detail page
+      traceroutes_list.html     # Traceroutes list page
+      traceroute_detail.html    # Traceroute detail page
+      partials/
+        node_table_rows.html    # HTMX partial for node rows
+        trace_table_rows.html   # HTMX partial for trace rows
+  graph/
+    builder.py       # NetworkX graph construction
+    renderer.py      # PNG/SVG rendering
+  ingestion/
+    base.py          # DataSource abstract base class
+    mqtt.py          # MQTT ingestion implementation
 tests/               # pytest test suite
-legacy/              # Original single-file script (reference only)
 ```
