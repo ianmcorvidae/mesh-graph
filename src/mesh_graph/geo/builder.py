@@ -5,6 +5,7 @@ import math
 import sqlite3
 from typing import Optional
 
+from mesh_graph import OVERFLOW_ROUTE_LENGTH
 from mesh_graph.db import (
     get_link_positions_for_trace,
     get_links_for_network,
@@ -332,33 +333,15 @@ def build_network_geojson(
 
         resolved = _approximate_positions(node_ids, positioned, adjacency)
 
-        # Build node features
-        node_features: list[dict] = []
-        node_info_cache: dict[int, sqlite3.Row] = {}
-        for nid in sorted(node_ids):
-            info = node_info_cache.get(nid)
-            if info is None:
-                info = _node_info(conn, nid)
-                node_info_cache[nid] = info
-            lonlat = resolved[nid]
-            node_features.append(
-                _node_to_feature(
-                    nid,
-                    lonlat,
-                    role=info["role"],
-                    long_name=info["long_name"],
-                    short_name=info["short_name"],
-                    has_position=nid in positioned,
-                    is_approximated=nid not in positioned,
-                )
-            )
-
         # Build edge features, collapsed by unordered pair for integer-to-integer
         # edges, and separately for unknown hop edges.
         # Direction is determined by link_start/link_end positions, not is_reply.
         edge_groups: dict[tuple[int, int], dict] = {}
         unknown_groups: dict[tuple[str, str], dict] = {}
         for row in rows:
+            route_len = row["route_len"]
+            if route_len is not None and route_len >= OVERFLOW_ROUTE_LENGTH:
+                continue
             start = row["link_start"]
             end = row["link_end"]
             is_unknown = not isinstance(start, int) or not isinstance(end, int)
@@ -398,6 +381,16 @@ def build_network_geojson(
                         g["in_snr_values"].append(float(row["snr"]))
                     g["in_count"] += 1
 
+        # Derive the visible node set from edges (excludes overflow-only nodes)
+        edge_node_ids: set[int] = set()
+        for a, b in edge_groups:
+            edge_node_ids.add(a)
+            edge_node_ids.add(b)
+        for g in unknown_groups.values():
+            for val in (g["start"], g["end"]):
+                if isinstance(val, int):
+                    edge_node_ids.add(val)
+
         # Unknown hop placement: midpoint of bounding known nodes
         unknown_hop_positions: dict[str, tuple[float, float]] = {}
         if include_unknown:
@@ -410,9 +403,31 @@ def build_network_geojson(
                 if bounds:
                     unknown_hop_positions[str(start) + "-" + str(end)] = _centroid(bounds)
 
-        edge_features: list[dict] = []
+        # Build node features (only for nodes that appear in non-overflow edges)
+        node_features: list[dict] = []
+        node_info_cache: dict[int, sqlite3.Row] = {}
+        for nid in sorted(edge_node_ids):
+            if nid not in resolved:
+                continue
+            info = node_info_cache.get(nid)
+            if info is None:
+                info = _node_info(conn, nid)
+                node_info_cache[nid] = info
+            lonlat = resolved[nid]
+            node_features.append(
+                _node_to_feature(
+                    nid,
+                    lonlat,
+                    role=info["role"],
+                    long_name=info["long_name"],
+                    short_name=info["short_name"],
+                    has_position=nid in positioned,
+                    is_approximated=nid not in positioned,
+                )
+            )
 
         # Integer-to-integer collapsed edges
+        edge_features: list[dict] = []
         for key, g in edge_groups.items():
             a, b = key
             if a not in resolved or b not in resolved:
@@ -629,7 +644,7 @@ def build_trace_geojson(
             is_reply = bool(row["is_reply"])
             snr = float(row["snr"]) if row["snr"] is not None else None
             route_len = row["route_len"]
-            is_overflow = route_len is not None and route_len >= 8
+            is_overflow = route_len is not None and route_len >= OVERFLOW_ROUTE_LENGTH
             if is_overflow:
                 g["is_overflow"] = True
             if route_len is not None and (
@@ -700,6 +715,9 @@ def build_trace_geojson(
         # Unknown hop edges (grouped by string pair, kept directed)
         unknown_groups: dict[tuple[str, str], dict] = {}
         for row in filtered_rows:
+            route_len = row["route_len"]
+            if route_len is not None and route_len >= OVERFLOW_ROUTE_LENGTH:
+                continue
             start = row["link_start"]
             end = row["link_end"]
             if isinstance(start, int) and isinstance(end, int):
@@ -881,33 +899,15 @@ def build_node_geojson(
 
         resolved = _approximate_positions(node_ids, node_pos_by_id, adjacency)
 
-        node_features: list[dict] = []
-        node_info_cache: dict[int, sqlite3.Row] = {}
-        for nid in sorted(node_ids):
-            info = node_info_cache.get(nid)
-            if info is None:
-                info = _node_info(conn, nid)
-                node_info_cache[nid] = info
-            lonlat = resolved[nid]
-            node_features.append(
-                _node_to_feature(
-                    nid,
-                    lonlat,
-                    role=info["role"],
-                    long_name=info["long_name"],
-                    short_name=info["short_name"],
-                    has_position=nid in node_pos_by_id,
-                    is_approximated=nid not in node_pos_by_id,
-                    is_center=nid == node_id,
-                )
-            )
-
         # Collapse edges per unordered pair and determine directionality
         # relative to the center node. Direction is based on whether the
         # center node appears in link_start (outgoing) or link_end (incoming),
         # NOT on is_reply (which is a traceroute-level concept).
         edge_groups: dict[tuple[int, int], dict] = {}
         for row in rows:
+            route_len = row["route_len"]
+            if route_len is not None and route_len >= OVERFLOW_ROUTE_LENGTH:
+                continue
             start = row["link_start"]
             end = row["link_end"]
             if not isinstance(start, int) or not isinstance(end, int):
@@ -932,6 +932,72 @@ def build_node_geojson(
                 if row["snr"] is not None:
                     g["in_snr_values"].append(float(row["snr"]))
                 g["in_count"] += 1
+
+        # Unknown hop edges (grouped by string pair, kept directed)
+        unknown_groups: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            route_len = row["route_len"]
+            if route_len is not None and route_len >= OVERFLOW_ROUTE_LENGTH:
+                continue
+            start = row["link_start"]
+            end = row["link_end"]
+            if isinstance(start, int) and isinstance(end, int):
+                continue
+            key = (str(start), str(end))
+            g = unknown_groups.get(key)
+            if g is None:
+                g = {
+                    "start": start,
+                    "end": end,
+                    "out_snr_values": [],
+                    "in_snr_values": [],
+                    "out_count": 0,
+                    "in_count": 0,
+                }
+                unknown_groups[key] = g
+            snr = float(row["snr"]) if row["snr"] is not None else None
+            if not row["is_reply"]:
+                if snr is not None:
+                    g["out_snr_values"].append(snr)
+                g["out_count"] += 1
+            else:
+                if snr is not None:
+                    g["in_snr_values"].append(snr)
+                g["in_count"] += 1
+
+        # Derive the visible node set from edges (center node is always included)
+        edge_node_ids: set[int] = {node_id}
+        for a, b in edge_groups:
+            edge_node_ids.add(a)
+            edge_node_ids.add(b)
+        for g in unknown_groups.values():
+            for val in (g["start"], g["end"]):
+                if isinstance(val, int):
+                    edge_node_ids.add(val)
+
+        # Build node features (only for nodes that appear in non-overflow edges)
+        node_features: list[dict] = []
+        node_info_cache: dict[int, sqlite3.Row] = {}
+        for nid in sorted(edge_node_ids):
+            if nid not in resolved:
+                continue
+            info = node_info_cache.get(nid)
+            if info is None:
+                info = _node_info(conn, nid)
+                node_info_cache[nid] = info
+            lonlat = resolved[nid]
+            node_features.append(
+                _node_to_feature(
+                    nid,
+                    lonlat,
+                    role=info["role"],
+                    long_name=info["long_name"],
+                    short_name=info["short_name"],
+                    has_position=nid in node_pos_by_id,
+                    is_approximated=nid not in node_pos_by_id,
+                    is_center=nid == node_id,
+                )
+            )
 
         edge_features: list[dict] = []
         for key, g in edge_groups.items():

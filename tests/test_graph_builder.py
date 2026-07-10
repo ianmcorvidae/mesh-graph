@@ -1252,3 +1252,96 @@ def test_node_graph_inbound_depth_excludes_forward_edges(db):
     assert (f"!{NODE_B:08x}", f"!{NODE_C:08x}") not in edges
     assert (f"!{NODE_C:08x}", f"!{NODE_B:08x}") in edges
     assert (f"!{NODE_B:08x}", f"!{NODE_A:08x}") in edges
+
+
+# ---------------------------------------------------------------------------
+# Overflow exclusion
+# ---------------------------------------------------------------------------
+
+
+def test_network_graph_excludes_overflow_rows(db):
+    upsert_node(db, NODE_A, long_name="A", short_name="A", role="ROUTER")
+    upsert_node(db, NODE_B, long_name="B", short_name="B", role="ROUTER")
+    # Non-overflow link
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=5.0,
+    )
+    # Overflow link
+    insert_link(
+        db,
+        trace_id=TRACE_2,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=2.0,
+        route_len=8,
+    )
+    G = build_simple_network_graph(db)
+    assert G.has_edge(f"!{NODE_A:08x}", f"!{NODE_B:08x}")
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    # Label should only reflect non-overflow SNR
+    assert "2.0" not in edge.get("label", "")
+
+
+def test_network_graph_drops_edge_when_all_overflow(db):
+    upsert_node(db, NODE_A, long_name="A", short_name="A", role="ROUTER")
+    upsert_node(db, NODE_B, long_name="B", short_name="B", role="ROUTER")
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=5.0,
+        route_len=8,
+    )
+    insert_link(
+        db,
+        trace_id=TRACE_2,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=2.0,
+        route_len=8,
+    )
+    G = build_simple_network_graph(db)
+    assert not G.has_edge(f"!{NODE_A:08x}", f"!{NODE_B:08x}")
+
+
+def test_node_graph_excludes_overflow_rows(db):
+    upsert_node(db, NODE_A, long_name="A", short_name="A", role="ROUTER")
+    upsert_node(db, NODE_B, long_name="B", short_name="B", role="ROUTER")
+    # Non-overflow link
+    insert_link(
+        db,
+        trace_id=TRACE_1,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=5.0,
+    )
+    # Overflow link
+    insert_link(
+        db,
+        trace_id=TRACE_2,
+        from_id=NODE_A,
+        to_id=NODE_B,
+        link_start=NODE_A,
+        link_end=NODE_B,
+        snr=2.0,
+        route_len=8,
+    )
+    G = build_node_graph(db, node_id=NODE_A, depth=1)
+    assert G.has_edge(f"!{NODE_A:08x}", f"!{NODE_B:08x}")
+    edge = G[f"!{NODE_A:08x}"][f"!{NODE_B:08x}"]
+    assert "2.0" not in edge.get("label", "")

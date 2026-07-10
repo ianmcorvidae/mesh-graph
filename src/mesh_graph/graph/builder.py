@@ -6,6 +6,7 @@ from typing import Literal, Optional
 import networkx as nx
 import networkx.algorithms.community as nxcom
 
+from mesh_graph import OVERFLOW_ROUTE_LENGTH
 from mesh_graph.db import (
     get_links_for_network,
     get_links_for_nodes,
@@ -17,7 +18,6 @@ from mesh_graph.db import (
 from mesh_graph.observability import traced_span
 from mesh_graph.utils import int_to_hex_color, node_id_format, node_id_str
 
-_OVERFLOW_ROUTE_LENGTHS = frozenset({8})
 _OVERFLOW_EDGE_COLOR = "#ee5500"
 
 
@@ -53,7 +53,7 @@ def _overflow_route_cap(route_len: object) -> Optional[int]:
         normalized = int(route_len)
     except (TypeError, ValueError):
         return None
-    return normalized if normalized in _OVERFLOW_ROUTE_LENGTHS else None
+    return normalized if normalized >= OVERFLOW_ROUTE_LENGTH else None
 
 
 def _snr_range_label(snrs: list[float]) -> str:
@@ -328,6 +328,8 @@ def _add_collapsed_edges(
         edge_snrs: dict[tuple[str, str], list[float]] = {}
         edge_colors: dict[tuple[str, str], str] = {}
         for row in rows:
+            if _overflow_route_cap(row["route_len"]) is not None:
+                continue
             start_name = node_mapper(row["link_start"])
             end_name = node_mapper(row["link_end"])
             key = (start_name, end_name)
@@ -412,6 +414,8 @@ def build_simple_network_graph(
             filtered_rows.append(row)
 
         for row in filtered_rows:
+            if _overflow_route_cap(row["route_len"]) is not None:
+                continue
             start = row["link_start"]
             end = row["link_end"]
             if not (is_visible_node(start) and is_visible_node(end)):

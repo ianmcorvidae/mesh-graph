@@ -96,6 +96,7 @@ function meshMap(mapId, geojsonUrl, pageType) {
     addLayers() {
       var self = this;
       var nodeColor = ['get', 'color'];
+      var overflowColor = '#ee5500';
       var edgeColor = ['get', 'snr_color'];
       var edgeWidth = pageType === 'node' ? 2 : ['case', ['get', 'is_fast_path'], 5, 2];
 
@@ -103,22 +104,29 @@ function meshMap(mapId, geojsonUrl, pageType) {
         id: 'edges-out',
         type: 'line',
         source: 'geojson',
-        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'out']],
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'out'], ['!=', ['get', 'is_overflow'], true]],
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth }
       });
       self.map.addLayer({
         id: 'edges-in',
         type: 'line',
         source: 'geojson',
-        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'in']],
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'in'], ['!=', ['get', 'is_overflow'], true]],
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [3, 3] }
       });
       self.map.addLayer({
         id: 'edges-both',
         type: 'line',
         source: 'geojson',
-        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'both']],
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'both'], ['!=', ['get', 'is_overflow'], true]],
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [5, 1, 1, 1] }
+      });
+      self.map.addLayer({
+        id: 'edges-overflow',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'is_overflow'], true]],
+        paint: { 'line-color': overflowColor, 'line-width': edgeWidth, 'line-dasharray': [1, 2] }
       });
 
       self.map.addLayer({
@@ -154,10 +162,11 @@ function meshMap(mapId, geojsonUrl, pageType) {
       self.map.on('click', 'edges-out', function(e) { self._showEdgePopup(e); });
       self.map.on('click', 'edges-in', function(e) { self._showEdgePopup(e); });
       self.map.on('click', 'edges-both', function(e) { self._showEdgePopup(e); });
+      self.map.on('click', 'edges-overflow', function(e) { self._showEdgePopup(e); });
 
       self.map.on('mouseenter', 'nodes', function() { self.map.getCanvas().style.cursor = 'pointer'; });
       self.map.on('mouseleave', 'nodes', function() { self.map.getCanvas().style.cursor = ''; });
-      ['edges-out', 'edges-in', 'edges-both'].forEach(function(id) {
+      ['edges-out', 'edges-in', 'edges-both', 'edges-overflow'].forEach(function(id) {
         self.map.on('mouseenter', id, function() { self.map.getCanvas().style.cursor = 'pointer'; });
         self.map.on('mouseleave', id, function() { self.map.getCanvas().style.cursor = ''; });
       });

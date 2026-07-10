@@ -352,3 +352,127 @@ def test_build_network_geojson_falls_back_to_current_node_position(db):
     assert nodes[NODE_B]["properties"]["is_approximated"] is False
     assert nodes[NODE_A]["geometry"]["coordinates"] != [0.0, 0.0]
     assert nodes[NODE_B]["geometry"]["coordinates"] != [0.0, 0.0]
+
+
+def test_build_network_geojson_excludes_overflow_rows(db):
+    init_db(db)
+    _set_node_positions(db)
+    pos_a = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_A,)).fetchone()[0]
+    )
+    pos_b = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_B,)).fetchone()[0]
+    )
+    # Non-overflow link
+    _insert_positioned_link(
+        db,
+        1,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=5.0,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    # Overflow link (route_len >= 8)
+    _insert_positioned_link(
+        db,
+        2,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=2.0,
+        route_len=8,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    geo = build_network_geojson(db)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 1
+    edge = edges[0]
+    # Only non-overflow SNR should be reflected
+    assert edge["properties"]["out_snr_avg"] == 5.0
+    assert edge["properties"]["link_count"] == 1
+
+
+def test_build_network_geojson_excludes_all_overflow_edges(db):
+    init_db(db)
+    _set_node_positions(db)
+    pos_a = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_A,)).fetchone()[0]
+    )
+    pos_b = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_B,)).fetchone()[0]
+    )
+    # Only overflow links
+    _insert_positioned_link(
+        db,
+        1,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=5.0,
+        route_len=8,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    _insert_positioned_link(
+        db,
+        2,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=2.0,
+        route_len=8,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    geo = build_network_geojson(db)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 0
+
+
+def test_build_node_geojson_excludes_overflow_rows(db):
+    init_db(db)
+    _set_node_positions(db)
+    pos_a = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_A,)).fetchone()[0]
+    )
+    pos_b = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_B,)).fetchone()[0]
+    )
+    # Non-overflow link
+    _insert_positioned_link(
+        db,
+        1,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=5.0,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    # Overflow link
+    _insert_positioned_link(
+        db,
+        2,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        snr=2.0,
+        route_len=8,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    geo = build_node_geojson(db, node_id=NODE_A, depth=1)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["properties"]["out_snr_avg"] == 5.0
+    assert edge["properties"]["link_count"] == 1
