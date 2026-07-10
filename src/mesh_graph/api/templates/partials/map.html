@@ -162,6 +162,37 @@ function meshMap(mapId, geojsonUrl, pageType) {
         self.map.on('mouseleave', id, function() { self.map.getCanvas().style.cursor = ''; });
       });
     },
+    _snrHistSVG(hist) {
+      if (!hist) return '';
+      if (typeof hist === 'string') { try { hist = JSON.parse(hist); } catch(e) { return ''; } }
+      if (!hist.length) return '';
+      var labels = ['<-15', '-15', '-12', '-9', '-6', '-3', '0', '3', '6', '>9'];
+      var barW = 20, gap = 1, h = 50, pad = 2, topPad = 14;
+      var n = hist.length;
+      var maxCount = Math.max.apply(null, hist);
+      if (maxCount === 0) return '';
+      var totalW = n * (barW + gap) - gap + 2 * pad;
+      var totalH = topPad + h + 14 + pad;
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + totalW + '" height="' + totalH + '" style="display:block;margin:4px 0">';
+      for (var i = 0; i < n; i++) {
+        var barH = maxCount > 0 ? (hist[i] / maxCount) * h : 0;
+        var x = pad + i * (barW + gap);
+        var y = topPad + h - barH;
+        var r = Math.round(180 + (i / (n - 1)) * 75);
+        var g = Math.round(40 + (i / (n - 1)) * 160);
+        var b = Math.round(40 + ((n - 1 - i) / (n - 1)) * 40);
+        svg += '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + barH + '" fill="rgb(' + r + ',' + g + ',' + b + ')" rx="1"/>';
+        if (hist[i] > 0) {
+          svg += '<text x="' + (x + barW / 2) + '" y="' + (y - 2) + '" text-anchor="middle" font-size="9" fill="#333">' + hist[i] + '</text>';
+        }
+      }
+      for (var i = 0; i < n; i++) {
+        var x = pad + i * (barW + gap) + barW / 2;
+        svg += '<text x="' + x + '" y="' + (topPad + h + 10) + '" text-anchor="middle" font-size="8" fill="#666">' + labels[i] + '</text>';
+      }
+      svg += '</svg>';
+      return svg;
+    },
     _showEdgePopup(e) {
       var f = e.features[0];
       var props = f.properties;
@@ -181,9 +212,11 @@ function meshMap(mapId, geojsonUrl, pageType) {
       }
       if (props.out_snr_min != null || props.out_snr_max != null) {
         lines.push('Outbound SNR: ' + snrRange(props.out_snr_min, props.out_snr_max, props.out_snr_avg));
+        lines.push(this._snrHistSVG(props.out_snr_hist));
       }
       if (props.in_snr_min != null || props.in_snr_max != null) {
         lines.push('Inbound SNR: ' + snrRange(props.in_snr_min, props.in_snr_max, props.in_snr_avg));
+        lines.push(this._snrHistSVG(props.in_snr_hist));
       }
 
       if (props.is_fast_path) lines.push('Fast path');
