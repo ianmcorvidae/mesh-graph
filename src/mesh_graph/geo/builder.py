@@ -204,29 +204,19 @@ def build_network_geojson(
     end_ts: Optional[int] = None,
     include_clients: bool = False,
     include_unknown: bool = False,
-    direction: str = "both",
 ) -> dict:
     """Build a GeoJSON FeatureCollection for the network view."""
     with traced_span(
         "geo.build_network_geojson",
         warn_ms=2000,
-        attributes={"start_ts": start_ts, "end_ts": end_ts, "direction": direction},
+        attributes={"start_ts": start_ts, "end_ts": end_ts},
     ) as span:
         rows = get_links_for_network(conn, start_ts=start_ts, end_ts=end_ts)
-
-        # Direction filtering
-        filtered_rows: list[sqlite3.Row] = []
-        for row in rows:
-            if direction == "outbound" and row["is_reply"]:
-                continue
-            if direction == "inbound" and not row["is_reply"]:
-                continue
-            filtered_rows.append(row)
 
         # Collect integer node IDs and build adjacency for approximation
         node_ids: set[int] = set()
         adjacency: dict[int, set[int]] = {}
-        for row in filtered_rows:
+        for row in rows:
             for val in (row["link_start"], row["link_end"]):
                 if isinstance(val, int):
                     node_ids.add(val)
@@ -241,7 +231,7 @@ def build_network_geojson(
         # link_end (received-at), falling back to link_start.
         latest_pos_id: dict[int, int] = {}
         latest_ts: dict[int, int] = {}
-        for row in filtered_rows:
+        for row in rows:
             for endpoint, key in (("link_start", "start"), ("link_end", "end")):
                 val = row[endpoint]
                 if not isinstance(val, int):
@@ -277,15 +267,6 @@ def build_network_geojson(
 
         resolved = _approximate_positions(node_ids, positioned, adjacency)
 
-        # Determine which nodes participate in fast-path edges.
-        fast_path_nodes: set[int] = set()
-        for row in filtered_rows:
-            if not row["is_fast_path"]:
-                continue
-            for val in (row["link_start"], row["link_end"]):
-                if isinstance(val, int):
-                    fast_path_nodes.add(val)
-
         # Build node features
         node_features: list[dict] = []
         node_info_cache: dict[int, sqlite3.Row] = {}
@@ -304,15 +285,15 @@ def build_network_geojson(
                     short_name=info["short_name"],
                     has_position=nid in positioned,
                     is_approximated=nid not in positioned,
-                    is_fast_path=nid in fast_path_nodes,
                 )
             )
 
         # Build edge features, collapsed by unordered pair for integer-to-integer
         # edges, and separately for unknown hop edges.
+        # Direction is determined by link_start/link_end positions, not is_reply.
         edge_groups: dict[tuple[int, int], dict] = {}
-        unknown_groups: dict[tuple[object, object], dict] = {}
-        for row in filtered_rows:
+        unknown_groups: dict[tuple[str, str], dict] = {}
+        for row in rows:
             start = row["link_start"]
             end = row["link_end"]
             is_unknown = not isinstance(start, int) or not isinstance(end, int)
@@ -324,7 +305,6 @@ def build_network_geojson(
                         "start": start,
                         "end": end,
                         "snr_values": [],
-                        "is_reply": bool(row["is_reply"]),
                         "link_count": 0,
                     }
                     unknown_groups[key] = g
@@ -338,27 +318,20 @@ def build_network_geojson(
                     g = {
                         "a": key[0],
                         "b": key[1],
-                        "out_snr_values": [],
-                        "in_snr_values": [],
-                        "out_count": 0,
-                        "in_count": 0,
-                        "out_fast_path": False,
-                        "in_fast_path": False,
+                        "ab_snr_values": [],
+                        "ba_snr_values": [],
+                        "ab_count": 0,
+                        "ba_count": 0,
                     }
                     edge_groups[key] = g
-                is_reply = bool(row["is_reply"])
-                if not is_reply:
+                if start == key[0]:
                     if row["snr"] is not None:
-                        g["out_snr_values"].append(float(row["snr"]))
-                    g["out_count"] += 1
-                    if row["is_fast_path"]:
-                        g["out_fast_path"] = True
+                        g["ab_snr_values"].append(float(row["snr"]))
+                    g["ab_count"] += 1
                 else:
                     if row["snr"] is not None:
-                        g["in_snr_values"].append(float(row["snr"]))
-                    g["in_count"] += 1
-                    if row["is_fast_path"]:
-                        g["in_fast_path"] = True
+                        g["ba_snr_values"].append(float(row["snr"]))
+                    g["ba_count"] += 1
 
         # Unknown hop placement: midpoint of bounding known nodes
         unknown_hop_positions: dict[str, tuple[float, float]] = {}
@@ -379,23 +352,20 @@ def build_network_geojson(
             a, b = key
             if a not in resolved or b not in resolved:
                 continue
-            has_out = g["out_count"] > 0
-            has_in = g["in_count"] > 0
-            if has_out and has_in:
-                direction = "both"
-                snr_values = g["out_snr_values"] + g["in_snr_values"]
-                link_count = g["out_count"] + g["in_count"]
-                is_fast_path = g["out_fast_path"] or g["in_fast_path"]
-            elif has_out:
-                direction = "out"
-                snr_values = g["out_snr_values"]
-                link_count = g["out_count"]
-                is_fast_path = g["out_fast_path"]
+            has_ab = g["ab_count"] > 0
+            has_ba = g["ba_count"] > 0
+            if has_ab and has_ba:
+                edge_direction = "both"
+                snr_values = g["ab_snr_values"] + g["ba_snr_values"]
+                link_count = g["ab_count"] + g["ba_count"]
+            elif has_ab:
+                edge_direction = "out"
+                snr_values = g["ab_snr_values"]
+                link_count = g["ab_count"]
             else:
-                direction = "in"
-                snr_values = g["in_snr_values"]
-                link_count = g["in_count"]
-                is_fast_path = g["in_fast_path"]
+                edge_direction = "in"
+                snr_values = g["ba_snr_values"]
+                link_count = g["ba_count"]
             snr = sum(snr_values) / len(snr_values) if snr_values else None
             a_lonlat = resolved[a]
             b_lonlat = resolved[b]
@@ -410,8 +380,7 @@ def build_network_geojson(
                         "link_end_label": node_id_format(b),
                         "snr": snr,
                         "snr_color": _snr_color(snr),
-                        "direction": direction,
-                        "is_fast_path": is_fast_path,
+                        "direction": edge_direction,
                         "link_count": link_count,
                     },
                 )
@@ -450,8 +419,7 @@ def build_network_geojson(
                             else str(end),
                             "snr": snr,
                             "snr_color": _snr_color(snr),
-                            "direction": "out" if not g["is_reply"] else "in",
-                            "is_fast_path": False,
+                            "direction": "out",
                             "link_count": g["link_count"],
                             "is_unknown_hop": True,
                         },
@@ -860,8 +828,10 @@ def build_node_geojson(
                 )
             )
 
-        # Collapse edges per unordered pair and determine directionality:
-        # "out" = only A->B, "in" = only B->A, "both" = both directions observed.
+        # Collapse edges per unordered pair and determine directionality
+        # relative to the center node. Direction is based on whether the
+        # center node appears in link_start (outgoing) or link_end (incoming),
+        # NOT on is_reply (which is a traceroute-level concept).
         edge_groups: dict[tuple[int, int], dict] = {}
         for row in rows:
             start = row["link_start"]
@@ -878,22 +848,16 @@ def build_node_geojson(
                     "in_snr_values": [],
                     "out_count": 0,
                     "in_count": 0,
-                    "out_fast_path": False,
-                    "in_fast_path": False,
                 }
                 edge_groups[key] = g
-            if not row["is_reply"]:
+            if row["link_start"] == node_id:
                 if row["snr"] is not None:
                     g["out_snr_values"].append(float(row["snr"]))
                 g["out_count"] += 1
-                if row["is_fast_path"]:
-                    g["out_fast_path"] = True
             else:
                 if row["snr"] is not None:
                     g["in_snr_values"].append(float(row["snr"]))
                 g["in_count"] += 1
-                if row["is_fast_path"]:
-                    g["in_fast_path"] = True
 
         edge_features: list[dict] = []
         for key, g in edge_groups.items():
@@ -903,20 +867,17 @@ def build_node_geojson(
             has_out = g["out_count"] > 0
             has_in = g["in_count"] > 0
             if has_out and has_in:
-                direction = "both"
+                edge_direction = "both"
                 snr_values = g["out_snr_values"] + g["in_snr_values"]
                 link_count = g["out_count"] + g["in_count"]
-                is_fast_path = g["out_fast_path"] or g["in_fast_path"]
             elif has_out:
-                direction = "out"
+                edge_direction = "out"
                 snr_values = g["out_snr_values"]
                 link_count = g["out_count"]
-                is_fast_path = g["out_fast_path"]
             else:
-                direction = "in"
+                edge_direction = "in"
                 snr_values = g["in_snr_values"]
                 link_count = g["in_count"]
-                is_fast_path = g["in_fast_path"]
             snr = sum(snr_values) / len(snr_values) if snr_values else None
             a_lonlat = resolved[a]
             b_lonlat = resolved[b]
@@ -931,8 +892,7 @@ def build_node_geojson(
                         "link_end_label": node_id_format(b),
                         "snr": snr,
                         "snr_color": _snr_color(snr),
-                        "direction": direction,
-                        "is_fast_path": is_fast_path,
+                        "direction": edge_direction,
                         "link_count": link_count,
                     },
                 )

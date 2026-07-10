@@ -31,7 +31,6 @@ _NETWORK_GEOJSON_QUERY_PARAMS = {
     "end",
     "include_clients",
     "include_unknown_nodes",
-    "direction",
 }
 _TRACE_GEOJSON_QUERY_PARAMS = {"from", "to", "date", "direction"}
 _NODE_GEOJSON_QUERY_PARAMS = {"start", "end", "direction", "depth"}
@@ -87,7 +86,6 @@ def geojson_network(
     end: Optional[str] = Query(default=None),
     include_clients: bool = Query(default=False),
     include_unknown_nodes: bool = Query(default=False),
-    direction: Literal["both", "outbound", "inbound"] = Query(default="both"),
 ):
     with traced_span(
         "api.geojson.network",
@@ -95,7 +93,6 @@ def geojson_network(
         attributes={
             "include_clients": include_clients,
             "include_unknown_nodes": include_unknown_nodes,
-            "direction": direction,
         },
     ):
         _reject_unknown_query_params(request, _NETWORK_GEOJSON_QUERY_PARAMS)
@@ -117,7 +114,6 @@ def geojson_network(
             max_ts=max_ts,
             include_clients=include_clients,
             include_unknown_nodes=include_unknown_nodes,
-            direction=direction,
         )
         cache: TTLCache = request.app.state._geojson_cache
         return _build_geojson(
@@ -128,7 +124,6 @@ def geojson_network(
                 end_ts=end_ts,
                 include_clients=include_clients,
                 include_unknown=include_unknown_nodes,
-                direction=direction,
             ),
             key,
             cache_ttl,

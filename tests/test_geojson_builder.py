@@ -133,7 +133,8 @@ def test_build_network_geojson_approximates_positionless_node(db):
     assert nodes[NODE_C]["geometry"]["coordinates"] != nodes[NODE_A]["geometry"]["coordinates"]
 
 
-def test_build_network_geojson_respects_direction(db):
+def test_build_network_geojson_direction_from_link_positions(db):
+    """Network edge direction is determined by link_start/link_end, not is_reply."""
     init_db(db)
     _set_node_positions(db)
     pos_a = get_position(
@@ -142,6 +143,8 @@ def test_build_network_geojson_respects_direction(db):
     pos_b = get_position(
         db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_B,)).fetchone()[0]
     )
+
+    # Single A->B link: direction should be "out"
     _insert_positioned_link(
         db,
         1,
@@ -149,10 +152,15 @@ def test_build_network_geojson_respects_direction(db):
         NODE_B,
         NODE_A,
         NODE_B,
-        is_reply=0,
         link_start_position_id=pos_a["id"],
         link_end_position_id=pos_b["id"],
     )
+    geo = build_network_geojson(db)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 1
+    assert edges[0]["properties"]["direction"] == "out"
+
+    # Both A->B and B->A links: direction should be "both"
     _insert_positioned_link(
         db,
         1,
@@ -160,26 +168,13 @@ def test_build_network_geojson_respects_direction(db):
         NODE_B,
         NODE_B,
         NODE_A,
-        is_reply=1,
         link_start_position_id=pos_b["id"],
         link_end_position_id=pos_a["id"],
     )
-
-    out_geo = build_network_geojson(db, direction="outbound")
-    assert len([f for f in out_geo["features"] if f["properties"]["layer"] == "edge"]) == 1
-    assert all(
-        f["properties"]["direction"] == "out"
-        for f in out_geo["features"]
-        if f["properties"]["layer"] == "edge"
-    )
-
-    in_geo = build_network_geojson(db, direction="inbound")
-    assert len([f for f in in_geo["features"] if f["properties"]["layer"] == "edge"]) == 1
-    assert all(
-        f["properties"]["direction"] == "in"
-        for f in in_geo["features"]
-        if f["properties"]["layer"] == "edge"
-    )
+    geo = build_network_geojson(db)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 1
+    assert edges[0]["properties"]["direction"] == "both"
 
 
 def test_build_trace_geojson(db):
@@ -282,6 +277,58 @@ def test_build_node_geojson(db):
     assert nodes[NODE_A]["properties"]["is_center"] is True
     assert NODE_B in nodes
     assert len(edges) == 1
+    # Direction from center node's perspective: A is link_start, so "out"
+    assert edges[0]["properties"]["direction"] == "out"
+
+
+def test_build_node_geojson_direction_from_link_positions(db):
+    """Node edge direction uses link_start/link_end, not is_reply."""
+    init_db(db)
+    _set_node_positions(db)
+    pos_a = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_A,)).fetchone()[0]
+    )
+    pos_b = get_position(
+        db, db.execute("SELECT position_id FROM nodes WHERE nodenum = ?", (NODE_B,)).fetchone()[0]
+    )
+
+    # A->B link, center is A: direction should be "out" (A is link_start)
+    _insert_positioned_link(
+        db,
+        1,
+        NODE_A,
+        NODE_B,
+        NODE_A,
+        NODE_B,
+        link_start_position_id=pos_a["id"],
+        link_end_position_id=pos_b["id"],
+    )
+    geo = build_node_geojson(db, node_id=NODE_A, depth=1)
+    edges = [f for f in geo["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges) == 1
+    assert edges[0]["properties"]["direction"] == "out"
+
+    # A->B link, center is B: direction should be "in" (B is link_end)
+    geo_b = build_node_geojson(db, node_id=NODE_B, depth=1)
+    edges_b = [f for f in geo_b["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges_b) == 1
+    assert edges_b[0]["properties"]["direction"] == "in"
+
+    # Both A->B and B->A links, center is A: direction should be "both"
+    _insert_positioned_link(
+        db,
+        1,
+        NODE_A,
+        NODE_B,
+        NODE_B,
+        NODE_A,
+        link_start_position_id=pos_b["id"],
+        link_end_position_id=pos_a["id"],
+    )
+    geo_both = build_node_geojson(db, node_id=NODE_A, depth=1)
+    edges_both = [f for f in geo_both["features"] if f["properties"]["layer"] == "edge"]
+    assert len(edges_both) == 1
+    assert edges_both[0]["properties"]["direction"] == "both"
 
 
 def test_build_network_geojson_falls_back_to_current_node_position(db):
