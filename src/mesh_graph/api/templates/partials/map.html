@@ -64,9 +64,11 @@ function meshMap(mapId, geojsonUrl, pageType) {
         ? ['all', ['==', ['get', 'layer'], 'node'], ['==', ['get', 'is_fast_path'], true]]
         : ['==', ['get', 'layer'], 'node'];
       ['edges-out', 'edges-in', 'edges-both'].forEach(function(id) {
-        if (this.map.getLayer(id)) {
-          this.map.setFilter(id, edgeFilter);
-        }
+        [id, id + '-hitarea'].forEach(function(layerId) {
+          if (this.map.getLayer(layerId)) {
+            this.map.setFilter(layerId, edgeFilter);
+          }
+        }, this);
       }, this);
       if (this.map.getLayer('nodes')) {
         this.map.setFilter('nodes', nodeFilter);
@@ -100,12 +102,29 @@ function meshMap(mapId, geojsonUrl, pageType) {
       var edgeColor = ['get', 'snr_color'];
       var edgeWidth = pageType === 'node' ? 2 : ['case', ['get', 'is_fast_path'], 5, 2];
 
+      var hitareaWidth = 12;
+      var hitareaPaint = { 'line-color': 'rgba(0,0,0,0)', 'line-width': hitareaWidth };
+
+      self.map.addLayer({
+        id: 'edges-out-hitarea',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'out'], ['!=', ['get', 'is_overflow'], true]],
+        paint: hitareaPaint
+      });
       self.map.addLayer({
         id: 'edges-out',
         type: 'line',
         source: 'geojson',
         filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'out'], ['!=', ['get', 'is_overflow'], true]],
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth }
+      });
+      self.map.addLayer({
+        id: 'edges-in-hitarea',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'in'], ['!=', ['get', 'is_overflow'], true]],
+        paint: hitareaPaint
       });
       self.map.addLayer({
         id: 'edges-in',
@@ -115,11 +134,25 @@ function meshMap(mapId, geojsonUrl, pageType) {
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [3, 3] }
       });
       self.map.addLayer({
+        id: 'edges-both-hitarea',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'both'], ['!=', ['get', 'is_overflow'], true]],
+        paint: hitareaPaint
+      });
+      self.map.addLayer({
         id: 'edges-both',
         type: 'line',
         source: 'geojson',
         filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'direction'], 'both'], ['!=', ['get', 'is_overflow'], true]],
         paint: { 'line-color': edgeColor, 'line-width': edgeWidth, 'line-dasharray': [5, 1, 1, 1] }
+      });
+      self.map.addLayer({
+        id: 'edges-overflow-hitarea',
+        type: 'line',
+        source: 'geojson',
+        filter: ['all', ['==', ['get', 'layer'], 'edge'], ['==', ['get', 'is_overflow'], true]],
+        paint: hitareaPaint
       });
       self.map.addLayer({
         id: 'edges-overflow',
@@ -159,16 +192,18 @@ function meshMap(mapId, geojsonUrl, pageType) {
         new maplibregl.Popup().setLngLat(f.geometry.coordinates).setHTML(lines.join('<br>')).addTo(self.map);
       });
 
-      self.map.on('click', 'edges-out', function(e) { self._showEdgePopup(e); });
-      self.map.on('click', 'edges-in', function(e) { self._showEdgePopup(e); });
-      self.map.on('click', 'edges-both', function(e) { self._showEdgePopup(e); });
-      self.map.on('click', 'edges-overflow', function(e) { self._showEdgePopup(e); });
+      ['edges-out', 'edges-in', 'edges-both', 'edges-overflow'].forEach(function(id) {
+        self.map.on('click', id, function(e) { self._showEdgePopup(e); });
+        self.map.on('click', id + '-hitarea', function(e) { self._showEdgePopup(e); });
+      });
 
       self.map.on('mouseenter', 'nodes', function() { self.map.getCanvas().style.cursor = 'pointer'; });
       self.map.on('mouseleave', 'nodes', function() { self.map.getCanvas().style.cursor = ''; });
       ['edges-out', 'edges-in', 'edges-both', 'edges-overflow'].forEach(function(id) {
-        self.map.on('mouseenter', id, function() { self.map.getCanvas().style.cursor = 'pointer'; });
-        self.map.on('mouseleave', id, function() { self.map.getCanvas().style.cursor = ''; });
+        [id, id + '-hitarea'].forEach(function(layerId) {
+          self.map.on('mouseenter', layerId, function() { self.map.getCanvas().style.cursor = 'pointer'; });
+          self.map.on('mouseleave', layerId, function() { self.map.getCanvas().style.cursor = ''; });
+        });
       });
     },
     _snrHistSVG(hist) {
@@ -246,9 +281,11 @@ function meshMap(mapId, geojsonUrl, pageType) {
       this.map.setLayoutProperty('nodes', 'visibility', this.showNodes ? 'visible' : 'none');
       var edgeLayers = ['edges-out', 'edges-in', 'edges-both'];
       edgeLayers.forEach(function(id) {
-        if (this.map.getLayer(id)) {
-          this.map.setLayoutProperty(id, 'visibility', this.showEdges ? 'visible' : 'none');
-        }
+        [id, id + '-hitarea'].forEach(function(layerId) {
+          if (this.map.getLayer(layerId)) {
+            this.map.setLayoutProperty(layerId, 'visibility', this.showEdges ? 'visible' : 'none');
+          }
+        }, this);
       }, this);
     },
     fitBounds(data) {
