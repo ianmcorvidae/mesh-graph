@@ -221,6 +221,7 @@ function nodeControls() {
       if (this.userSetTime) return;
       var self = this;
       function tick() {
+        if (self.userSetTime) return;
         var now = new Date();
         var end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0));
         var start = new Date(end.getTime() - 86400000);
