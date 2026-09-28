@@ -272,16 +272,10 @@ def traceroutes_page(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     db = _get_db(request)
-    try:
-        from_id = parse_node_id(from_node) if from_node else None
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"Invalid from node: {from_node!r}")
-    try:
-        to_id = parse_node_id(to_node) if to_node else None
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"Invalid to node: {to_node!r}")
 
-    rows, next_cursor = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
+    rows, next_cursor = get_traceroutes(
+        db, cursor=after, limit=limit, from_search=from_node, to_search=to_node
+    )
 
     return templates.TemplateResponse(
         request,
@@ -304,16 +298,10 @@ def traceroutes_partial(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     db = _get_db(request)
-    try:
-        from_id = parse_node_id(from_node) if from_node else None
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"Invalid from node: {from_node!r}")
-    try:
-        to_id = parse_node_id(to_node) if to_node else None
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"Invalid to node: {to_node!r}")
 
-    rows, next_cursor = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
+    rows, next_cursor = get_traceroutes(
+        db, cursor=after, limit=limit, from_search=from_node, to_search=to_node
+    )
 
     return templates.TemplateResponse(
         request,
@@ -334,7 +322,13 @@ def traceroute_detail(
 ):
     db = _get_db(request)
     trace_info = db.execute(
-        "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute WHERE trace_id = ? ORDER BY first_seen_ts DESC LIMIT 1",
+        "SELECT t.trace_id, t.from_id, t.to_id, t.first_seen_ts, "
+        "nf.short_name AS from_short_name, nf.long_name AS from_long_name, "
+        "nt.short_name AS to_short_name, nt.long_name AS to_long_name "
+        "FROM traceroute t "
+        "LEFT JOIN nodes nf ON t.from_id = nf.nodenum "
+        "LEFT JOIN nodes nt ON t.to_id = nt.nodenum "
+        "WHERE t.trace_id = ? ORDER BY t.first_seen_ts DESC LIMIT 1",
         (trace_id,),
     ).fetchone()
 

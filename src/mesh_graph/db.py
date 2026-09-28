@@ -394,23 +394,46 @@ def get_traceroutes(
     conn: sqlite3.Connection,
     cursor: Optional[int] = None,
     limit: int = 100,
-    from_id: Optional[int] = None,
-    to_id: Optional[int] = None,
+    from_search: Optional[str] = None,
+    to_search: Optional[str] = None,
 ) -> tuple[list[sqlite3.Row], Optional[int]]:
     if cursor is None:
         cursor = int(time.time())
 
     params: list = [cursor]
     query = (
-        "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute WHERE first_seen_ts <= ?"
+        "SELECT t.trace_id, t.from_id, t.to_id, t.first_seen_ts, "
+        "nf.short_name AS from_short_name, nf.long_name AS from_long_name, "
+        "nt.short_name AS to_short_name, nt.long_name AS to_long_name, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.link_end = t.to_id AND tl.is_reply = 0) AS reached_dest, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.is_reply = 1) AS reply_heard, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.link_end = t.from_id AND tl.is_reply = 1) AS reached_origin "
+        "FROM traceroute t "
+        "LEFT JOIN nodes nf ON t.from_id = nf.nodenum "
+        "LEFT JOIN nodes nt ON t.to_id = nt.nodenum "
+        "WHERE t.first_seen_ts <= ?"
     )
-    if from_id is not None:
-        query += " AND from_id = ?"
-        params.append(from_id)
-    if to_id is not None:
-        query += " AND to_id = ?"
-        params.append(to_id)
-    query += " ORDER BY first_seen_ts DESC, trace_id DESC, from_id DESC, to_id DESC LIMIT ?"
+    if from_search:
+        search_clean = from_search.strip().lstrip("!").lower().replace("0x", "")
+        try:
+            node_num = int(search_clean, 16)
+            query += " AND (t.from_id = ? OR nf.long_name LIKE ? OR nf.short_name LIKE ?)"
+            params.extend([node_num, f"%{from_search}%", f"%{from_search}%"])
+        except ValueError:
+            query += " AND (nf.long_name LIKE ? OR nf.short_name LIKE ?)"
+            params.extend([f"%{from_search}%", f"%{from_search}%"])
+
+    if to_search:
+        search_clean = to_search.strip().lstrip("!").lower().replace("0x", "")
+        try:
+            node_num = int(search_clean, 16)
+            query += " AND (t.to_id = ? OR nt.long_name LIKE ? OR nt.short_name LIKE ?)"
+            params.extend([node_num, f"%{to_search}%", f"%{to_search}%"])
+        except ValueError:
+            query += " AND (nt.long_name LIKE ? OR nt.short_name LIKE ?)"
+            params.extend([f"%{to_search}%", f"%{to_search}%"])
+
+    query += " ORDER BY t.first_seen_ts DESC, t.trace_id DESC, t.from_id DESC, t.to_id DESC LIMIT ?"
     params.append(limit + 1)
 
     rows = conn.execute(query, params).fetchall()
@@ -432,10 +455,17 @@ def get_traceroutes_for_node(
     conn: sqlite3.Connection, nodenum: int, limit: int = 20
 ) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT DISTINCT t.trace_id, t.from_id, t.to_id, t.first_seen_ts "
+        "SELECT DISTINCT t.trace_id, t.from_id, t.to_id, t.first_seen_ts, "
+        "nf.short_name AS from_short_name, nf.long_name AS from_long_name, "
+        "nt.short_name AS to_short_name, nt.long_name AS to_long_name, "
+        "EXISTS(SELECT 1 FROM traceroute_link tlx WHERE tlx.trace_id = t.trace_id AND tlx.from_id = t.from_id AND tlx.to_id = t.to_id AND tlx.link_end = t.to_id AND tlx.is_reply = 0) AS reached_dest, "
+        "EXISTS(SELECT 1 FROM traceroute_link tlx WHERE tlx.trace_id = t.trace_id AND tlx.from_id = t.from_id AND tlx.to_id = t.to_id AND tlx.is_reply = 1) AS reply_heard, "
+        "EXISTS(SELECT 1 FROM traceroute_link tlx WHERE tlx.trace_id = t.trace_id AND tlx.from_id = t.from_id AND tlx.to_id = t.to_id AND tlx.link_end = t.from_id AND tlx.is_reply = 1) AS reached_origin "
         "FROM traceroute t "
         "JOIN traceroute_link tl ON t.trace_id = tl.trace_id "
         "AND t.from_id = tl.from_id AND t.to_id = tl.to_id "
+        "LEFT JOIN nodes nf ON t.from_id = nf.nodenum "
+        "LEFT JOIN nodes nt ON t.to_id = nt.nodenum "
         "WHERE tl.link_start = ? OR tl.link_end = ? "
         "ORDER BY t.first_seen_ts DESC LIMIT ?",
         (nodenum, nodenum, limit),
@@ -452,8 +482,16 @@ def get_recent_nodes(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.
 
 def get_recent_traceroutes(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT trace_id, from_id, to_id, first_seen_ts FROM traceroute "
-        "ORDER BY first_seen_ts DESC, trace_id DESC, from_id DESC, to_id DESC LIMIT ?",
+        "SELECT t.trace_id, t.from_id, t.to_id, t.first_seen_ts, "
+        "nf.short_name AS from_short_name, nf.long_name AS from_long_name, "
+        "nt.short_name AS to_short_name, nt.long_name AS to_long_name, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.link_end = t.to_id AND tl.is_reply = 0) AS reached_dest, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.is_reply = 1) AS reply_heard, "
+        "EXISTS(SELECT 1 FROM traceroute_link tl WHERE tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id AND tl.link_end = t.from_id AND tl.is_reply = 1) AS reached_origin "
+        "FROM traceroute t "
+        "LEFT JOIN nodes nf ON t.from_id = nf.nodenum "
+        "LEFT JOIN nodes nt ON t.to_id = nt.nodenum "
+        "ORDER BY t.first_seen_ts DESC, t.trace_id DESC, t.from_id DESC, t.to_id DESC LIMIT ?",
         (limit,),
     ).fetchall()
 
@@ -513,8 +551,13 @@ def get_links_for_trace(
     if trace is None:
         return []
     query = (
-        "SELECT tl.*, t.from_id, t.to_id FROM traceroute_link tl "
+        "SELECT tl.*, t.from_id, t.to_id, "
+        "ns.short_name AS link_start_short_name, ns.long_name AS link_start_long_name, "
+        "ne.short_name AS link_end_short_name, ne.long_name AS link_end_long_name "
+        "FROM traceroute_link tl "
         "JOIN traceroute t ON tl.trace_id = t.trace_id AND tl.from_id = t.from_id AND tl.to_id = t.to_id "
+        "LEFT JOIN nodes ns ON tl.link_start = ns.nodenum "
+        "LEFT JOIN nodes ne ON tl.link_end = ne.nodenum "
         "WHERE tl.trace_id = ? AND tl.from_id = ? AND tl.to_id = ? "
         "ORDER BY tl.ts ASC, tl.is_reply ASC, tl.is_fast_path DESC, tl.link_start ASC, tl.link_end ASC"
     )

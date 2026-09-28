@@ -886,12 +886,13 @@ def test_traceroutes_can_filter_by_from_and_to_nodes(client, db):
     assert [t["trace_id"] for t in data] == [5001]
 
 
-def test_traceroutes_invalid_from_node_returns_422(client, db):
+def test_traceroutes_string_search_returns_200(client, db):
     insert_link(
         db, trace_id=TRACE_1, from_id=NODE_A, to_id=NODE_B, link_start=NODE_A, link_end=NODE_B
     )
     resp = client.get("/api/traceroutes?from=not-a-node")
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json() == []
 
 
 def test_network_graph_invalid_time_returns_422(client, db):

@@ -18,3 +18,6 @@ class TracerouteOut(BaseModel):
     from_id: int
     to_id: int
     first_seen_ts: Optional[int]
+    reached_dest: Optional[bool] = None
+    reply_heard: Optional[bool] = None
+    reached_origin: Optional[bool] = None

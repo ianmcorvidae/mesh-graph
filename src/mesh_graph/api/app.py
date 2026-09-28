@@ -377,16 +377,7 @@ def create_app(
         from_node: Optional[str] = Query(default=None, alias="from"),
         to_node: Optional[str] = Query(default=None, alias="to"),
     ):
-        try:
-            from_id = parse_node_id(from_node) if from_node is not None else None
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
-        try:
-            to_id = parse_node_id(to_node) if to_node is not None else None
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
-
-        rows, _next = get_traceroutes(db, cursor=after, limit=limit, from_id=from_id, to_id=to_id)
+        rows, _next = get_traceroutes(db, cursor=after, limit=limit, from_search=from_node, to_search=to_node)
         return [dict(r) for r in rows]
 
     _static = os.path.join(os.path.dirname(__file__), "static")

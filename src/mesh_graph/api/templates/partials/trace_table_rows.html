@@ -1,15 +1,46 @@
 <table>
-  <thead><tr><th>Trace ID</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
+  <thead><tr><th>Trace ID</th><th>Status</th><th>From</th><th>To</th><th>First Seen</th></tr></thead>
   <tbody>
   {% for trace in traceroutes %}
     <tr>
       <td><a href="/traceroutes/{{ trace.trace_id }}">{{ trace.trace_id }}</a></td>
-      <td><a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">!{{ '%08x' % trace.from_id }}</a></td>
-      <td><a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">!{{ '%08x' % trace.to_id }}</a></td>
+            <td style="text-align: center; font-size: 1.2em;">
+        {% if trace.reached_origin %}
+          <span title="Out and back">⤓⤒</span>
+        {% elif trace.reply_heard %}
+          <span title="Reached destination, reply lost">⤓↑</span>
+        {% elif trace.reached_dest %}
+          <span title="Reached destination, no reply">⤓</span>
+        {% else %}
+          <span title="Did not reach destination">↓</span>
+        {% endif %}
+      </td>
+<td>
+        <a href="/nodes/!{{ '%08x' % trace.from_id }}" class="node-id">
+          {% if trace.from_long_name %}
+            {{ trace.from_long_name }}{% if trace.from_short_name %} ({{ trace.from_short_name }}){% endif %}
+          {% elif trace.from_short_name %}
+            {{ trace.from_short_name }}
+          {% else %}
+            !{{ '%08x' % trace.from_id }}
+          {% endif %}
+        </a>
+      </td>
+      <td>
+        <a href="/nodes/!{{ '%08x' % trace.to_id }}" class="node-id">
+          {% if trace.to_long_name %}
+            {{ trace.to_long_name }}{% if trace.to_short_name %} ({{ trace.to_short_name }}){% endif %}
+          {% elif trace.to_short_name %}
+            {{ trace.to_short_name }}
+          {% else %}
+            !{{ '%08x' % trace.to_id }}
+          {% endif %}
+        </a>
+      </td>
       <td><time class="ts-utc" datetime="{{ trace.first_seen_ts | format_ts }}">{{ trace.first_seen_ts | format_ts }}</time></td>
     </tr>
   {% else %}
-    <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">No traceroutes found</td></tr>
+    <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem;">No traceroutes found</td></tr>
   {% endfor %}
   </tbody>
 </table>

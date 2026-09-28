@@ -5,7 +5,27 @@
   <div class="detail-header">
     <h1>Traceroute {{ trace_id }}</h1>
     {% if trace_info %}
-    <span class="meta"><a href="/nodes/!{{ '%08x' % trace_info.from_id }}" class="node-id">!{{ '%08x' % trace_info.from_id }}</a> → <a href="/nodes/!{{ '%08x' % trace_info.to_id }}" class="node-id">!{{ '%08x' % trace_info.to_id }}</a></span>
+    <span class="meta">
+      <a href="/nodes/!{{ '%08x' % trace_info.from_id }}" class="node-id">
+        {% if trace_info.from_long_name %}
+          {{ trace_info.from_long_name }}{% if trace_info.from_short_name %} ({{ trace_info.from_short_name }}){% endif %}
+        {% elif trace_info.from_short_name %}
+          {{ trace_info.from_short_name }}
+        {% else %}
+          !{{ '%08x' % trace_info.from_id }}
+        {% endif %}
+      </a>
+      → 
+      <a href="/nodes/!{{ '%08x' % trace_info.to_id }}" class="node-id">
+        {% if trace_info.to_long_name %}
+          {{ trace_info.to_long_name }}{% if trace_info.to_short_name %} ({{ trace_info.to_short_name }}){% endif %}
+        {% elif trace_info.to_short_name %}
+          {{ trace_info.to_short_name }}
+        {% else %}
+          !{{ '%08x' % trace_info.to_id }}
+        {% endif %}
+      </a>
+    </span>
     <span class="meta">First seen: <time class="ts-utc" datetime="{{ trace_info.first_seen_ts | format_ts }}">{{ trace_info.first_seen_ts | format_ts }}</time></span>
     {% endif %}
   </div>
@@ -64,7 +84,7 @@
           <tr>
             <td>
               <template x-if="link.link_start_is_id">
-                <a :href="'/nodes/!' + link.link_start.toString(16).padStart(8, '0')" class="node-id" x-text="'!' + link.link_start.toString(16).padStart(8, '0')"></a>
+                <a :href="'/nodes/!' + link.link_start.toString(16).padStart(8, '0')" class="node-id" x-text="link.link_start_long_name ? (link.link_start_long_name + (link.link_start_short_name ? ' (' + link.link_start_short_name + ')' : '')) : (link.link_start_short_name || ('!' + link.link_start.toString(16).padStart(8, '0')))"></a>
               </template>
               <template x-if="!link.link_start_is_id">
                 <span class="node-id" x-text="link.link_start"></span>
@@ -72,7 +92,7 @@
             </td>
             <td>
               <template x-if="link.link_end_is_id">
-                <a :href="'/nodes/!' + link.link_end.toString(16).padStart(8, '0')" class="node-id" x-text="'!' + link.link_end.toString(16).padStart(8, '0')"></a>
+                <a :href="'/nodes/!' + link.link_end.toString(16).padStart(8, '0')" class="node-id" x-text="link.link_end_long_name ? (link.link_end_long_name + (link.link_end_short_name ? ' (' + link.link_end_short_name + ')' : '')) : (link.link_end_short_name || ('!' + link.link_end.toString(16).padStart(8, '0')))"></a>
               </template>
               <template x-if="!link.link_end_is_id">
                 <span class="node-id" x-text="link.link_end"></span>

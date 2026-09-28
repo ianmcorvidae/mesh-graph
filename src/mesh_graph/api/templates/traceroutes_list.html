@@ -5,14 +5,14 @@
 
 <div class="controls">
   <label>From
-    <input type="search" placeholder="!aabbccdd" name="from"
+    <input type="search" placeholder="!aabbccdd or Name" name="from"
            hx-get="/traceroutes/partial" hx-trigger="input changed delay:300ms"
            hx-target="#trace-table" hx-push-url="true" hx-indicator="#trace-spinner"
            hx-include="[name='to']"
            {% if from_id %}value="{{ from_id }}"{% endif %}>
   </label>
   <label>To
-    <input type="search" placeholder="!aabbccdd" name="to"
+    <input type="search" placeholder="!aabbccdd or Name" name="to"
            hx-get="/traceroutes/partial" hx-trigger="input changed delay:300ms"
            hx-target="#trace-table" hx-push-url="true" hx-indicator="#trace-spinner"
            hx-include="[name='from']"
