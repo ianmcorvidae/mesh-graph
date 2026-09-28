@@ -360,3 +360,90 @@ def traceroute_detail(
             "geojson_url": geojson_url,
         },
     )
+
+
+@router.get("/routes", response_class=HTMLResponse)
+def routes_page(
+    request: Request,
+    from_node: Optional[str] = Query(default=None, alias="from"),
+    to_node: Optional[str] = Query(default=None, alias="to"),
+):
+    default_start, default_end = _default_time_bounds()
+    return templates.TemplateResponse(
+        request,
+        "routes.html",
+        {
+            "default_start": default_start,
+            "default_end": default_end,
+            "from_id": from_node,
+            "to_id": to_node,
+        },
+    )
+
+from typing import Literal
+@router.get("/api/routes_max_count")
+def routes_max_count(
+    request: Request,
+    from_node: Optional[str] = Query(default=None, alias="from"),
+    to_node: Optional[str] = Query(default=None, alias="to"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    direction: Literal["both", "out", "in"] = Query(default="both"),
+):
+    if not from_node or not to_node:
+        return {"max_frequency": 0, "total_paths": 0, "path_frequencies": []}
+        
+    db = _get_db(request)
+    try:
+        from_id = parse_node_id(from_node)
+        to_id = parse_node_id(to_node)
+    except ValueError:
+        return {"max_frequency": 0, "total_paths": 0, "path_frequencies": []}
+        
+    start_ts, end_ts = parse_time_bounds(start, end)
+    
+    from mesh_graph.db import get_routes_links_between_nodes
+    import networkx as nx
+    
+    links = get_routes_links_between_nodes(db, node_a=from_id, node_b=to_id, start_ts=start_ts, end_ts=end_ts)
+    
+    traces = {}
+    for row in links:
+        key = (row['trace_id'], row['is_reply'])
+        traces.setdefault(key, []).append(row)
+        
+    path_counts = {}
+    for (trace_id, is_reply), trace_links in traces.items():
+        TG = nx.DiGraph()
+        for link in trace_links:
+            TG.add_edge(link['link_start'], link['link_end'])
+            
+        if not (TG.has_node(from_id) and TG.has_node(to_id)):
+            continue
+            
+        try:
+            path_ab = nx.shortest_path(TG, source=from_id, target=to_id)
+            if direction in ("both", "out"):
+                path_key = (tuple(path_ab), False)
+                path_counts[path_key] = path_counts.get(path_key, 0) + 1
+        except nx.NetworkXNoPath:
+            pass
+            
+        try:
+            path_ba = nx.shortest_path(TG, source=to_id, target=from_id)
+            if direction in ("both", "in"):
+                path_key = (tuple(path_ba), True)
+                path_counts[path_key] = path_counts.get(path_key, 0) + 1
+        except nx.NetworkXNoPath:
+            pass
+                
+    if not path_counts:
+        return {"max_frequency": 0, "total_paths": 0, "path_frequencies": []}
+        
+    freqs = list(path_counts.values())
+    return {
+        "max_frequency": max(freqs),
+        "total_paths": len(freqs),
+        "path_frequencies": freqs
+    }
+

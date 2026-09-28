@@ -24,6 +24,7 @@ from mesh_graph.graph.builder import (
     build_node_graph,
     build_simple_network_graph,
     build_trace_graph,
+    build_routes_graph,
 )
 from mesh_graph.graph.renderer import render
 from mesh_graph.observability import instrument_fastapi, traced_span
@@ -354,8 +355,97 @@ def create_app(
                 span_name="graph.build_node_graph",
             )
 
+
+    @app.get("/graph/routes")
+    def graph_routes(
+        request: Request,
+        format: str = Query(default="svg"),
+        from_node: Optional[str] = Query(default=None, alias="from"),
+        to_node: Optional[str] = Query(default=None, alias="to"),
+        start: Optional[str] = Query(default=None),
+        end: Optional[str] = Query(default=None),
+        min_count: int = Query(default=0, ge=0),
+        direction: Literal["both", "out", "in"] = Query(default="both"),
+        clickable: bool = Query(default=False),
+    ):
+        with traced_span("api.graph.routes", warn_ms=5000):
+            if format not in _MEDIA_TYPES:
+                raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'")
+            if not from_node or not to_node:
+                raise HTTPException(status_code=400, detail="from and to nodes are required")
+                
+            try:
+                from_id = parse_node_id(from_node)
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid from node_id: {from_node!r}")
+            try:
+                to_id = parse_node_id(to_node)
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid to node_id: {to_node!r}")
+                
+            with traced_span("parse_time_range", warn_ms=50):
+                start_ts, end_ts = _parse_time_range(start, end)
+
+            now_ts = int(time.time())
+            end_is_past = end_ts is not None and end_ts <= now_ts
+
+            if end_is_past:
+                with traced_span("cache.version_query", warn_ms=10):
+                    max_ts_a = get_max_link_ts_for_node(db, from_id, start_ts=start_ts, end_ts=end_ts)
+                    max_ts_b = get_max_link_ts_for_node(db, to_id, start_ts=start_ts, end_ts=end_ts)
+                    max_ts = max(max_ts_a, max_ts_b)
+                ck = cache_key(
+                    endpoint="routes",
+                    from_id=from_id,
+                    to_id=to_id,
+                    start_ts=start_ts,
+                    end_is_past=end_is_past,
+                    min_count=min_count,
+                    direction=direction,
+                    clickable=clickable,
+                    format=format,
+                    layout="dot",
+                    max_ts=max_ts,
+                )
+                cache_ttl = 3600
+            else:
+                ck = cache_key(
+                    endpoint="routes",
+                    from_id=from_id,
+                    to_id=to_id,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    min_count=min_count,
+                    direction=direction,
+                    clickable=clickable,
+                    format=format,
+                    layout="dot",
+                )
+                cache_ttl = 60
+
+            return _build_and_render(
+                db,
+                _cache,
+                lambda: build_routes_graph(
+                    db,
+                    from_node=from_id,
+                    to_node=to_id,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    min_count=min_count,
+                    direction=direction,
+                    clickable=clickable,
+                ),
+                ck,
+                cache_ttl,
+                format,
+                layout_prog="dot",
+                span_name="graph.build_routes_graph",
+            )
+
     @app.get("/api/nodes", response_model=List[NodeOut])
     def list_nodes(
+        q: Optional[str] = Query(default=None, description="Search by node ID or name"),
         after: Optional[int] = Query(
             default=None, description="Return nodes seen at or before this UNIX timestamp"
         ),
@@ -363,7 +453,7 @@ def create_app(
             default=100, ge=1, le=500, description="Maximum number of rows to return"
         ),
     ):
-        rows, _next = get_nodes(db, cursor=after, limit=limit)
+        rows, _next = get_nodes(db, cursor=after, limit=limit, search=q)
         return [dict(r) for r in rows]
 
     @app.get("/api/traceroutes", response_model=List[TracerouteOut])

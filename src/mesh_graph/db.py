@@ -249,8 +249,13 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: s
 
 
 def parse_node_id(node_id: str) -> int:
-    """Accept '!aabbccdd', 0x-prefixed hex, plain hex, or decimal."""
+    """Accept '!aabbccdd', 0x-prefixed hex, plain hex, or decimal. Also supports 'Name - !aabbccdd'"""
     s = node_id.strip()
+    
+    # Extract trailing !hex if formatted as 'Name - !hex'
+    if " - !" in s:
+        s = "!" + s.split(" - !")[-1]
+
     if s.startswith("!"):
         return int(s[1:], 16)
     if s.lower().startswith("0x"):
@@ -696,3 +701,42 @@ def get_max_ts_for_trace(conn: sqlite3.Connection, trace_id: int) -> int:
     link_ts = _max_ts(conn, "traceroute_link", ["trace_id = ?"], [trace_id])
     uplink_ts = _max_ts(conn, "traceroute_uplink", ["trace_id = ?"], [trace_id])
     return max(link_ts, uplink_ts)
+
+
+def get_routes_links_between_nodes(
+    conn: sqlite3.Connection,
+    node_a: int,
+    node_b: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> list[sqlite3.Row]:
+    query = "SELECT DISTINCT trace_id FROM traceroute_link WHERE (link_start = ? OR link_end = ?)"
+    params: list = [node_a, node_a]
+
+    if start_ts is not None:
+        query += " AND ts >= ?"
+        params.append(start_ts)
+    if end_ts is not None:
+        query += " AND ts <= ?"
+        params.append(end_ts)
+
+    query += " AND trace_id IN (SELECT trace_id FROM traceroute_link WHERE link_start = ? OR link_end = ?)"
+    params.extend([node_b, node_b])
+
+    with traced_span("db.get_routes_links_between_nodes", warn_ms=500) as span:
+        rows = conn.execute(query, params).fetchall()
+        trace_ids = [r["trace_id"] for r in rows]
+        if not trace_ids:
+            return []
+            
+        all_links = []
+        for batch in _batched(trace_ids, 900):
+            placeholders = ",".join("?" * len(batch))
+            links_query = f"SELECT * FROM traceroute_link WHERE trace_id IN ({placeholders}) ORDER BY ts ASC, is_reply ASC, is_fast_path DESC, link_start ASC, link_end ASC"
+            batch_links = conn.execute(links_query, batch).fetchall()
+            all_links.extend(batch_links)
+            
+        span.set_attribute("db.trace_count", len(trace_ids))
+        span.set_attribute("db.link_count", len(all_links))
+        return all_links
+

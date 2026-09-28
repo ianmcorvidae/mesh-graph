@@ -14,6 +14,7 @@ from mesh_graph.db import (
     get_node_attrs,
     get_trace_for_selector,
     get_uplinks_for_trace,
+    get_routes_links_between_nodes,
 )
 from mesh_graph.observability import traced_span
 from mesh_graph.utils import int_to_hex_color, node_id_format, node_id_str
@@ -789,3 +790,216 @@ def build_node_graph(
     if clickable:
         _set_clickable_nodes(G)
     return G
+
+
+def build_routes_graph(
+    conn: sqlite3.Connection,
+    from_node: int,
+    to_node: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    min_count: int = 0,
+    direction: Literal["both", "out", "in"] = "both",
+    clickable: bool = False,
+) -> nx.DiGraph:
+    links = get_routes_links_between_nodes(
+        conn, node_a=from_node, node_b=to_node, start_ts=start_ts, end_ts=end_ts
+    )
+    
+    # Group links by trace_id and is_reply
+    traces = {}
+    for row in links:
+        key = (row['trace_id'], row['is_reply'])
+        traces.setdefault(key, []).append(row)
+        
+    path_counts = {}
+    path_edges = {}
+    
+    for (trace_id, is_reply), trace_links in traces.items():
+        TG = nx.DiGraph()
+        for link in trace_links:
+            TG.add_edge(link['link_start'], link['link_end'], snr=link['snr'])
+            
+        if not (TG.has_node(from_node) and TG.has_node(to_node)):
+            continue
+            
+        try:
+            path_ab = nx.shortest_path(TG, source=from_node, target=to_node)
+            if direction in ("both", "out"):
+                path_key = (tuple(path_ab), False)
+                path_counts[path_key] = path_counts.get(path_key, 0) + 1
+                if path_key not in path_edges:
+                    edges = []
+                    for i in range(len(path_ab) - 1):
+                        u = path_ab[i]
+                        v = path_ab[i+1]
+                        snr = TG[u][v].get('snr')
+                        edges.append((u, v, snr))
+                    path_edges[path_key] = edges
+        except nx.NetworkXNoPath:
+            pass
+            
+        try:
+            path_ba = nx.shortest_path(TG, source=to_node, target=from_node)
+            if direction in ("both", "in"):
+                path_key = (tuple(path_ba), True)
+                path_counts[path_key] = path_counts.get(path_key, 0) + 1
+                if path_key not in path_edges:
+                    edges = []
+                    for i in range(len(path_ba) - 1):
+                        u = path_ba[i]
+                        v = path_ba[i+1]
+                        snr = TG[u][v].get('snr')
+                        edges.append((u, v, snr))
+                    path_edges[path_key] = edges
+        except nx.NetworkXNoPath:
+            pass
+                
+    G = nx.MultiDiGraph()
+    
+    relevant_nodenums = set()
+    edge_counts = {}
+    edge_snrs = {}
+    
+    max_edge_count = 0
+    
+    # Filter by min_count and aggregate edge statistics
+    for (path, is_inbound), count in path_counts.items():
+        if count <= min_count:
+            continue
+            
+        edges = path_edges[(path, is_inbound)]
+        for (u, v, snr) in edges:
+            if isinstance(u, int):
+                relevant_nodenums.add(u)
+            if isinstance(v, int):
+                relevant_nodenums.add(v)
+            edge_key = (u, v, is_inbound)
+            edge_counts[edge_key] = edge_counts.get(edge_key, 0) + count
+            max_edge_count = max(max_edge_count, edge_counts[edge_key])
+            
+            if snr is not None:
+                if edge_key not in edge_snrs:
+                    edge_snrs[edge_key] = []
+                edge_snrs[edge_key].append(float(snr))
+                
+    if not relevant_nodenums:
+        # Return empty graph with source and target nodes so they at least appear
+        G.add_node(node_id_format(from_node))
+        G.add_node(node_id_format(to_node))
+        return G
+        
+    all_attrs = get_node_attrs(conn, relevant_nodenums=relevant_nodenums)
+    
+    for (u, v, is_inbound), e_count in edge_counts.items():
+        if is_inbound:
+            # Path went B -> A. u is closer to B, v is closer to A.
+            # To make Graphviz layout A on the left, we add edge v -> u.
+            # We set dir="back" so the arrow points visually from u -> v (B -> A).
+            start_name = node_id_format(v)
+            end_name = node_id_format(u)
+            arrow_dir = "back"
+        else:
+            # Path went A -> B. u is closer to A, v is closer to B.
+            start_name = node_id_format(u)
+            end_name = node_id_format(v)
+            arrow_dir = "forward"
+            
+        # Calculate penwidth (1.0 to 10.0 based on relative frequency)
+        if max_edge_count > 1:
+            # linear scaling
+            penwidth = 1.0 + 9.0 * ((e_count - 1) / (max_edge_count - 1))
+        else:
+            penwidth = 1.0
+            
+        # Formatting label (count + snr)
+        label_parts = [f"Count: {e_count}"]
+        snrs = edge_snrs.get((u, v, is_inbound), [])
+        if snrs:
+            avg_snr = sum(snrs) / len(snrs)
+            label_parts.append(f"Avg SNR: {avg_snr:.1f} dB")
+            
+        color = _xor_link_color(u, v)
+        style = "dashed" if is_inbound else "solid"
+            
+        G.add_edge(
+            start_name,
+            end_name,
+            color=color,
+            fontcolor=color,
+            style=style,
+            penwidth=penwidth,
+            label="\\n".join(label_parts),
+            weight=e_count,
+            dir=arrow_dir
+        )
+        
+    nx.set_node_attributes(G, all_attrs)
+    
+    from_str = node_id_format(from_node)
+    to_str = node_id_format(to_node)
+    
+    if G.has_node(from_str):
+        G.nodes[from_str].update({"style": "filled", "fillcolor": "#ffa9a9"})
+    if G.has_node(to_str):
+        G.nodes[to_str].update({"style": "filled", "fillcolor": "#a9a9ff"})
+        
+    G.graph["rank_source_node"] = from_str
+    G.graph["rank_sink_node"] = to_str
+    
+    if clickable:
+        _set_clickable_nodes(G)
+        
+    return G
+        
+    all_attrs = get_node_attrs(conn, relevant_nodenums=relevant_nodenums)
+    
+    for (u, v), e_count in edge_counts.items():
+        start_name = node_id_format(u)
+        end_name = node_id_format(v)
+        
+        # Calculate penwidth (1.0 to 10.0 based on relative frequency)
+        if max_edge_count > 1:
+            # linear scaling
+            penwidth = 1.0 + 9.0 * ((e_count - 1) / (max_edge_count - 1))
+        else:
+            penwidth = 1.0
+            
+        # Formatting label (count + snr)
+        label_parts = [f"Count: {e_count}"]
+        snrs = edge_snrs.get((u, v), [])
+        if snrs:
+            avg_snr = sum(snrs) / len(snrs)
+            label_parts.append(f"Avg SNR: {avg_snr:.1f} dB")
+            
+        color = _xor_link_color(u, v)
+            
+        G.add_edge(
+            start_name,
+            end_name,
+            color=color,
+            fontcolor=color,
+            style="solid",
+            penwidth=penwidth,
+            label="\\n".join(label_parts),
+            weight=e_count
+        )
+        
+    nx.set_node_attributes(G, all_attrs)
+    
+    from_str = node_id_format(from_node)
+    to_str = node_id_format(to_node)
+    
+    if G.has_node(from_str):
+        G.nodes[from_str].update({"style": "filled", "fillcolor": "#ffa9a9"})
+    if G.has_node(to_str):
+        G.nodes[to_str].update({"style": "filled", "fillcolor": "#a9a9ff"})
+        
+    G.graph["rank_source_node"] = from_str
+    G.graph["rank_sink_node"] = to_str
+    
+    if clickable:
+        _set_clickable_nodes(G)
+        
+    return G
+
