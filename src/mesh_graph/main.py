@@ -68,7 +68,11 @@ def cli() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="mesh-graph server")
-    parser.add_argument("--config", default="config.toml", help="Path to config.toml")
+    parser.add_argument(
+        "--config",
+        default="config.toml",
+        help="Path to config.toml (optional; env vars override file values)",
+    )
     parser.add_argument(
         "--mode",
         choices=["ingestion", "api", "both"],
@@ -81,3 +85,4 @@ def cli() -> None:
 
 if __name__ == "__main__":
     cli()
+

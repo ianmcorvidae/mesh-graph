@@ -1,0 +1,38 @@
+services:
+  mesh-graph:
+    image: mesh-graph:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - mesh-graph-data:/data
+    environment:
+      # Required
+      MQTT__BROKER: mqtt.example.com
+      # MQTT__PORT: 1883
+      # MQTT__USERNAME: ""
+      # MQTT__PASSWORD: ""
+      # MQTT__TOPIC: "msh/#"
+      # MQTT__ENCRYPTION_KEY: "1PG7OiApB1nwvP+rz05pAQ=="
+
+      # API
+      # API__HOST: "0.0.0.0"
+      # API__PORT: "8080"
+
+      # Database (stored in the /data volume)
+      # DB__PATH: "/data/trace-graph.db"
+
+      # Observability (OpenTelemetry)
+      # OBSERVABILITY__ENABLED: "false"
+      # OBSERVABILITY__SERVICE_NAME: "mesh-graph"
+      # OBSERVABILITY__ENVIRONMENT: "dev"
+      # OBSERVABILITY__EXPORTER: "otlp"
+      # OBSERVABILITY__OTLP_ENDPOINT: "http://localhost:4317"
+      # OBSERVABILITY__SAMPLE_RATIO: "1.0"
+
+      # Run mode: ingestion | api | both
+      # MESH_GRAPH_MODE: "both"
+
+volumes:
+  mesh-graph-data:

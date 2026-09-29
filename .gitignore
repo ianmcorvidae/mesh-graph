@@ -9,6 +9,7 @@ venv/
 env/
 
 # Local runtime/config artifacts
+.env
 config*.toml
 *.db
 *.db-shm

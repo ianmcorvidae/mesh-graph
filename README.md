@@ -19,6 +19,16 @@ uv run pre-commit install # install commit hooks
 
 ## Configuration
 
+Configuration is loaded in layers (highest priority wins):
+
+1. **Environment variables** (`MQTT__BROKER`, `API__PORT`, …)
+2. **config.toml** (if present)
+3. **Built-in defaults**
+
+The only required value is the MQTT broker — everything else has a sensible default.
+
+### Config file (local / bare-metal)
+
 Copy `config.toml.example` to `config.toml` and set your MQTT broker, topic, and
 encryption key. The full set of options with defaults is documented in the
 example file.
@@ -29,6 +39,33 @@ broker = "mqtt.example.com"
 topic = "msh/#"
 encryption_key = "1PG7OiApB1nwvP+rz05pAQ=="  # base64 AES key; default is the public Meshtastic key
 ```
+
+### Environment variables (Docker / CI)
+
+Every config value can be set via environment variable using the pattern
+`SECTION__FIELD` (double underscore). Env vars override any value from the
+config file:
+
+| Variable | Default |
+|----------|---------|
+| `MQTT__BROKER` | *(required)* |
+| `MQTT__PORT` | `1883` |
+| `MQTT__USERNAME` | `""` |
+| `MQTT__PASSWORD` | `""` |
+| `MQTT__TOPIC` | `msh/#` |
+| `MQTT__ENCRYPTION_KEY` | `1PG7OiApB1nwvP+rz05pAQ==` |
+| `API__HOST` | `0.0.0.0` |
+| `API__PORT` | `8080` |
+| `DB__PATH` | `trace-graph.db` (`/data/trace-graph.db` in Docker) |
+| `OBSERVABILITY__ENABLED` | `false` |
+| `OBSERVABILITY__SERVICE_NAME` | `mesh-graph` |
+| `OBSERVABILITY__ENVIRONMENT` | `dev` |
+| `OBSERVABILITY__EXPORTER` | `otlp` |
+| `OBSERVABILITY__OTLP_ENDPOINT` | `http://127.0.0.1:4317` |
+| `OBSERVABILITY__SAMPLE_RATIO` | `1.0` |
+
+You can also mix: use a config.toml for base settings and inject secrets via
+env vars (e.g. `MQTT__PASSWORD`).
 
 ## Observability (OpenTelemetry)
 
@@ -58,17 +95,24 @@ uv run mesh-graph --config config.toml --mode api                   # API only (
 ## Container image
 
 Published to `ghcr.io/ianmcorvidae/mesh-graph:latest` on `main` pushes.
-The entrypoint is `mesh-graph`, so pass `--config` and `--mode` directly:
+Configure entirely with environment variables — no config file needed:
 
 ```sh
 docker run --rm \
   -v meshgraph-data:/data \
-  ghcr.io/ianmcorvidae/mesh-graph:latest \
-  --config /config.toml \
-  --mode api
+  -e MQTT__BROKER=mqtt.example.com \
+  -e MQTT__PASSWORD=secret \
+  ghcr.io/ianmcorvidae/mesh-graph:latest
 ```
 
-Mount `/data` for SQLite persistence and point `db.path` at `/data/trace-graph.db`.
+Or use the included `docker-compose.yml`:
+
+```sh
+docker compose up -d
+```
+
+Set `MESH_GRAPH_MODE` to `ingestion`, `api`, or `both` (default).
+Mount `/data` for SQLite persistence.
 
 ## Web UI
 
@@ -201,7 +245,7 @@ uv run pytest
 
 ```
 src/mesh_graph/
-  config.py          # Config loading (TOML)
+  config.py          # Config loading (TOML + env var layering)
   db.py              # SQLite schema and query helpers
   main.py            # Entry point
   observability.py   # OpenTelemetry setup
