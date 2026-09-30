@@ -40,11 +40,16 @@
     <button @click="setViewMode('map')" :class="{ active: viewMode === 'map' }">Map</button>
   </div>
 
-  <div class="graph-container" :class="{ loading: loading }" x-show="viewMode === 'graph'">
+  <div class="graph-container" :class="{ loading: loading }" x-show="viewMode === 'graph'" @wheel.prevent>
     <div x-show="loading" class="spinner"></div>
-    <object :data="graphUrl" type="image/svg+xml"
-            @load="loading = false" @error="loading = false"
-            x-show="!loading" x-cloak></object>
+    <div class="zoom-controls" x-show="!loading" x-cloak>
+      <button type="button" @click="$refs.graphObj.__panZoom && $refs.graphObj.__panZoom.zoomIn()" title="Zoom In">+</button>
+      <button type="button" @click="$refs.graphObj.__panZoom && $refs.graphObj.__panZoom.zoomOut()" title="Zoom Out">-</button>
+      <button type="button" @click="$refs.graphObj.__panZoom && $refs.graphObj.__panZoom.resetZoom(); $refs.graphObj.__panZoom && $refs.graphObj.__panZoom.center()" title="Reset Zoom">↺</button>
+    </div>
+    <object x-ref="graphObj" :data="graphUrl" type="image/svg+xml"
+            @load="loading = false; initPanZoom($el)" @error="loading = false"
+            x-cloak></object>
   </div>
 
   <div x-show="viewMode === 'map'" x-cloak>

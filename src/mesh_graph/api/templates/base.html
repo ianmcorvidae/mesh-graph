@@ -8,6 +8,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 {% block head %}{% endblock %}
 </head>
@@ -51,6 +52,120 @@ function localToUtc(str) {
 }
 document.addEventListener('DOMContentLoaded', formatTimestamps);
 document.addEventListener('htmx:afterSwap', formatTimestamps);
+
+function initPanZoom(objEl) {
+  if (objEl.__panZoom) {
+    objEl.__panZoom.destroy();
+    delete objEl.__panZoom;
+  }
+  // Wait a bit longer to ensure Alpine has removed display: none
+  setTimeout(function() {
+    try {
+      if (objEl.style.display === 'none') return;
+      var svgDoc = objEl.contentDocument || objEl.getSVGDocument();
+      if (svgDoc) {
+        var svgEl = svgDoc.documentElement;
+        if (svgEl && svgEl.tagName.toLowerCase() === 'svg') {
+          svgEl.style.touchAction = 'none';
+        }
+        
+        // Explicitly prevent default wheel behavior inside the object document
+        // to stop the parent window from scrolling, overriding any passive defaults.
+        var preventScroll = function(e) { e.preventDefault(); };
+        svgDoc.addEventListener('wheel', preventScroll, { passive: false });
+        svgDoc.addEventListener('mousewheel', preventScroll, { passive: false });
+        svgDoc.addEventListener('DOMMouseScroll', preventScroll, { passive: false });
+        
+        // Prevent accidental navigation when clicking and dragging a node
+        var isDragging = false;
+        var startX, startY;
+        svgDoc.addEventListener('mousedown', function(e) {
+          isDragging = false;
+          startX = e.clientX;
+          startY = e.clientY;
+        });
+        svgDoc.addEventListener('mousemove', function(e) {
+          if (startX !== undefined && startY !== undefined) {
+            if (Math.abs(e.clientX - startX) > 3 || Math.abs(e.clientY - startY) > 3) {
+              isDragging = true;
+            }
+          }
+        });
+        svgDoc.addEventListener('mouseup', function(e) {
+          startX = undefined;
+          startY = undefined;
+        });
+        svgDoc.addEventListener('click', function(e) {
+          if (isDragging) {
+            e.preventDefault();
+            e.stopPropagation();
+            isDragging = false;
+          }
+        }, true);
+        
+        // Native touch support for panning and pinch-to-zoom
+        var initialScale = 1;
+        var initialPinchDistance = 0;
+        var lastPanX = 0;
+        var lastPanY = 0;
+        svgDoc.addEventListener('touchstart', function(e) {
+          if (e.touches.length === 1) {
+            lastPanX = e.touches[0].clientX;
+            lastPanY = e.touches[0].clientY;
+          } else if (e.touches.length === 2) {
+            e.preventDefault();
+            var dx = e.touches[0].clientX - e.touches[1].clientX;
+            var dy = e.touches[0].clientY - e.touches[1].clientY;
+            initialPinchDistance = Math.sqrt(dx*dx + dy*dy);
+            // Protect against touch ghosting where fingers report too close and cause massive zoom jumps
+            if (initialPinchDistance < 10) initialPinchDistance = 10;
+            if (objEl.__panZoom) initialScale = objEl.__panZoom.getZoom();
+          }
+        }, { passive: false });
+        svgDoc.addEventListener('touchmove', function(e) {
+          if (e.touches.length === 1 && objEl.__panZoom) {
+            e.preventDefault();
+            var dx = e.touches[0].clientX - lastPanX;
+            var dy = e.touches[0].clientY - lastPanY;
+            lastPanX = e.touches[0].clientX;
+            lastPanY = e.touches[0].clientY;
+            objEl.__panZoom.panBy({x: dx, y: dy});
+          } else if (e.touches.length === 2 && initialPinchDistance > 0 && objEl.__panZoom) {
+            e.preventDefault();
+            var dx = e.touches[0].clientX - e.touches[1].clientX;
+            var dy = e.touches[0].clientY - e.touches[1].clientY;
+            var dist = Math.sqrt(dx*dx + dy*dy);
+            var centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            var centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            // Standard pinch zoom: wider = zoom in
+            objEl.__panZoom.zoomAtPoint(initialScale * (dist / initialPinchDistance), {x: centerX, y: centerY});
+          }
+        }, { passive: false });
+        svgDoc.addEventListener('touchend', function(e) {
+          if (e.touches.length < 2) {
+            initialPinchDistance = 0;
+          }
+          if (e.touches.length === 1) {
+            lastPanX = e.touches[0].clientX;
+            lastPanY = e.touches[0].clientY;
+          }
+        }, { passive: false });
+      }
+      objEl.__panZoom = svgPanZoom(objEl, {
+        zoomEnabled: true,
+        controlIconsEnabled: false,
+        fit: true,
+        contain: true,
+        center: true,
+        zoomScaleSensitivity: 0.1,
+        minZoom: 0.01,
+        maxZoom: 10
+      });
+    } catch (e) {
+      console.error("Failed to init pan-zoom:", e);
+    }
+  }, 150);
+}
 </script>
 </body>
 </html>

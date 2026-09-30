@@ -87,10 +87,39 @@ h2 { font-size: 1.25rem; margin-bottom: 0.75rem; }
   border-radius: 0.5rem;
   overflow: hidden;
   position: relative;
+  height: 65vh;
   min-height: 300px;
+  touch-action: none;
 }
-.graph-container object { display: block; width: 100%; min-height: 400px; }
+.graph-container object { display: block; width: 100%; height: 100%; touch-action: none; }
 .graph-container.loading object { opacity: 0.3; }
+
+.zoom-controls {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  z-index: 10;
+}
+.zoom-controls button {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zoom-controls button:hover {
+  background: #e9ecef;
+}
 
 .map-container {
   width: 100%;

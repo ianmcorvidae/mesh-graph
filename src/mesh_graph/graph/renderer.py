@@ -68,6 +68,89 @@ def _to_pydot(G: nx.Graph, *, layout_prog: str) -> pydot.Dot:
     return pd
 
 
+_SVG_INJECTION = b"""
+  <script xlink:href="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js" />
+  <script>
+    <![CDATA[
+      if (window === window.top) {
+        window.addEventListener('load', function() {
+          var svgEl = document.documentElement;
+          // Force the standalone SVG to act as a fullscreen viewport
+          svgEl.style.width = '100vw';
+          svgEl.style.height = '100vh';
+          svgEl.style.margin = '0';
+          svgEl.style.overflow = 'hidden';
+          svgEl.style.touchAction = 'none';
+          if (document.body) document.body.style.margin = '0';
+          
+          var pz = svgPanZoom(svgEl, {
+            zoomEnabled: true,
+            controlIconsEnabled: true,
+            fit: true,
+            center: true,
+            contain: true,
+            minZoom: 0.01,
+            maxZoom: 10
+          });
+          
+          var initialScale = 1;
+          var initialPinchDistance = 0;
+          var lastPanX = 0;
+          var lastPanY = 0;
+          
+          svgEl.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 1) {
+              lastPanX = e.touches[0].clientX;
+              lastPanY = e.touches[0].clientY;
+            } else if (e.touches.length === 2) {
+              e.preventDefault();
+              var dx = e.touches[0].clientX - e.touches[1].clientX;
+              var dy = e.touches[0].clientY - e.touches[1].clientY;
+              initialPinchDistance = Math.sqrt(dx*dx + dy*dy);
+              if (initialPinchDistance < 10) initialPinchDistance = 10;
+              initialScale = pz.getZoom();
+            }
+          }, { passive: false });
+          
+          svgEl.addEventListener('touchmove', function(e) {
+            if (e.touches.length === 1) {
+              e.preventDefault();
+              var dx = e.touches[0].clientX - lastPanX;
+              var dy = e.touches[0].clientY - lastPanY;
+              lastPanX = e.touches[0].clientX;
+              lastPanY = e.touches[0].clientY;
+              pz.panBy({x: dx, y: dy});
+            } else if (e.touches.length === 2 && initialPinchDistance > 0) {
+              e.preventDefault();
+              var dx = e.touches[0].clientX - e.touches[1].clientX;
+              var dy = e.touches[0].clientY - e.touches[1].clientY;
+              var dist = Math.sqrt(dx*dx + dy*dy);
+              var centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+              var centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+              pz.zoomAtPoint(initialScale * (dist / initialPinchDistance), {x: centerX, y: centerY});
+            }
+          }, { passive: false });
+          
+          svgEl.addEventListener('touchend', function(e) {
+            if (e.touches.length < 2) {
+              initialPinchDistance = 0;
+            }
+            if (e.touches.length === 1) {
+              lastPanX = e.touches[0].clientX;
+              lastPanY = e.touches[0].clientY;
+            }
+          }, { passive: false });
+          
+          var preventScroll = function(e) { e.preventDefault(); };
+          svgEl.addEventListener('wheel', preventScroll, { passive: false });
+          svgEl.addEventListener('mousewheel', preventScroll, { passive: false });
+          svgEl.addEventListener('DOMMouseScroll', preventScroll, { passive: false });
+        });
+      }
+    ]]>
+  </script>
+</svg>"""
+
 def render(G: nx.Graph, format: str, *, layout_prog: str = "dot") -> bytes:
     fmt = format.lower()
     if fmt not in _SUPPORTED:
@@ -88,4 +171,5 @@ def render(G: nx.Graph, format: str, *, layout_prog: str = "dot") -> bytes:
     ):
         if fmt == "png":
             return pd.create_png(prog=layout_prog)
-        return pd.create_svg(prog=layout_prog)
+        svg_bytes = pd.create_svg(prog=layout_prog)
+        return svg_bytes.replace(b"</svg>", _SVG_INJECTION)
